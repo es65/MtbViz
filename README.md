@@ -34,7 +34,8 @@ I'm working on turning this into an iOS app, but wanted to open source some of t
 git clone https://github.com/es65/MtbViz
 cd MtbViz
 
-# Set Python version
+# Install (if needed) and Set Python version 3.8-3.12:
+pyenv install 3.12.0
 pyenv local 3.12.0
 
 # Create virtual environment
