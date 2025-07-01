@@ -1,0 +1,85 @@
+*sandbox*.py
+dev/
+resources/
+
+# Ignore private and development folders
+dev/
+private/
+*sandbox*.py
+
+# Ignore logs and info files
+logs/
+*.log
+*_info*
+
+# Ignore temporary files
+*.tmp
+
+# Ignore OS-generated files
+.DS_Store
+
+# Environments
+.env
+.venv
+venv/
+env/
+ENV/
+
+# But track the example environment file
+!.env.example
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebook
+.ipynb_checkpoints
+.checkpoints/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Model files
+models/*.pkl
+models/*.joblib
+
+# Environment variables
+.env.local
+
+# OS generated files
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.temp
