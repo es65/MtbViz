@@ -63,4 +63,11 @@ Sensor Logger collects the accelerometer, gyroscope, and GPS data that feeds thi
 6. During a ride: you can start Strava and use other apps without trouble--Sensor Logger continues to run and record data in the background. Just don't close the app. After dozens of rides using this app, I have not noticed any serious impact on iPhone battery life.
 7. After a ride: click "End Recording". Date files are saved locally on your phone and are shown in the Recordings tab. Whenever convenient (i.e. when you have good signal or WiFi), click on the data file for your ride and click "Export". Keep the default settings and click "Export Recording". Save to `MtbViz/mtb/data/raw`.
 
-### Usage (work in progress)
+### Usage
+
+...work in progress
+
+
+### Gallery and Examples
+
+![Dash web app](docs/assets/app_viz.png)
