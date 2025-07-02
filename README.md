@@ -46,7 +46,7 @@ source .venv/bin/activate
 pip install -e .
 
 # Run tests
-python -m pytest
+python tests/test_requirements.py
 ```
 
 ### Install and Set Up Sensor Logger
