@@ -81,3 +81,28 @@ lead_lag_cols = [
 # jumps:
 jump_z_accel_threshold = 1.5
 jump_min_consecutive_points = 2
+
+# Pipeline configuration defaults
+# These can be overridden via ProcessingConfig or CLI arguments
+
+# Data loading defaults
+DEFAULT_TIMEZONE = "America/Los_Angeles"
+DEFAULT_DOWNSAMPLE_FREQ = 5
+DEFAULT_BIN_DATA = True
+DEFAULT_BIN_WIDTH_MS = 50
+DEFAULT_DROPNA_RESAMPLED = True
+
+# Feature building defaults
+DEFAULT_ADD_LEAD_LAG = True
+DEFAULT_LEAD_PERIODS = [1, 2, 3]
+DEFAULT_LAG_PERIODS = [1, 2, 3]
+
+# Summary metrics defaults
+DEFAULT_DISTANCE_SMOOTH_WINDOW = 21
+DEFAULT_ELEVATION_SMOOTH_WINDOW = 25
+DEFAULT_ELEVATION_THRESHOLD = 0.0
+DEFAULT_SPEED_THRESHOLD = 0.0
+
+# Output defaults
+DEFAULT_SAVE_INTERMEDIATE = True
+DEFAULT_VERBOSE = False
