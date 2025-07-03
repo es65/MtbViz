@@ -1,5 +1,6 @@
 # Data science packages
 pandas==1.5.3
+pyarrow>=7.0.0
 numpy==1.26.4
 scipy==1.11.4
 scikit-learn==1.4.2
