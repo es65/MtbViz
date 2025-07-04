@@ -69,12 +69,12 @@ Sensor Logger collects the accelerometer, gyroscope, and GPS data that feeds thi
 
 #### Command Line Interface
 
-**TLRD:**
+**TLRD: Process and Visualize Single Ride**
 
-Once you've recorded a ride (or use one of the files in `data_examples/`):
+Once you've recorded a ride (or just demo one of the files in `data_examples/`):
 
 ```bash
-process --input data/raw/ride.zip && viz data/processed/ride.parquet
+process --input data/raw/ride.zip && viz --input data/processed/ride.parquet
 ```
 (Just replace "ride" with the actual name of your file obviously.)
 
@@ -101,6 +101,7 @@ process --input ride.zip --jump-threshold 2.0 --jump-min-consecutive 3
 - `--input, -i`: Path to zip file or directory (required)
 - `--output, -o`: Output directory (default: `data/processed`)
 - `--batch, -b`: Process all rides in input directory
+- `--overwrite, -f`: Reprocess and overwrite existing output files
 - `--downsample-freq`: Resample frequency in Hz (default: 5)
 - `--verbose, -v`: Enable detailed logging
 - `--jump-threshold`: Jump detection threshold (default: from config)
