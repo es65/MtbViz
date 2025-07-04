@@ -873,6 +873,7 @@ class Pipeline:
         self,
         input_path: Union[str, Path],
         output_dir: Optional[Union[str, Path]] = None,
+        overwrite: bool = False,
     ) -> Dict[str, Any]:
         """Process a single ride through the entire pipeline."""
         start_time = time.perf_counter()
@@ -884,6 +885,35 @@ class Pipeline:
             output_dir = Path(output_dir)
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Check if output files already exist
+        processed_output_path = output_dir / f"{input_path.stem}.parquet"
+        summary_output_path = output_dir / f"{input_path.stem}.json"
+
+        if processed_output_path.exists() and not overwrite:
+            self.logger.info(f"Output file already exists: {processed_output_path}")
+            self.logger.info(
+                "Skipping processing. Use --overwrite to force reprocessing."
+            )
+            return {
+                "raw_df": None,
+                "resampled_df": None,
+                "processed_df": None,
+                "summary_metrics": None,
+                "jump_events_df": None,
+                "output_files": {
+                    "raw": None,
+                    "resampled": None,
+                    "processed": processed_output_path,
+                    "summary": summary_output_path,
+                    "jumps": (
+                        output_dir / f"{input_path.stem}_jumps.parquet"
+                        if (output_dir / f"{input_path.stem}_jumps.parquet").exists()
+                        else None
+                    ),
+                },
+                "skipped": True,
+            }
 
         try:
             self.logger.info(f"Starting pipeline for: {input_path.name}")
@@ -909,7 +939,6 @@ class Pipeline:
             processed_df = self.feature_builder.process(resampled_df)
 
             # Save processed data
-            processed_output_path = output_dir / f"{input_path.stem}.parquet"
             processed_df.to_parquet(processed_output_path)
 
             # Step 3: Calculate metrics
@@ -917,7 +946,6 @@ class Pipeline:
             metrics_results = self.metrics_calculator.process(processed_df)
 
             # Save results
-            summary_output_path = output_dir / f"{input_path.stem}.json"
             with open(summary_output_path, "w") as f:
                 import json
 
@@ -950,6 +978,7 @@ class Pipeline:
                         else None
                     ),
                 },
+                "skipped": False,
             }
 
         except Exception as e:
@@ -957,7 +986,10 @@ class Pipeline:
             raise
 
     def process_multiple_rides(
-        self, input_dir: Union[str, Path], output_dir: Optional[Union[str, Path]] = None
+        self,
+        input_dir: Union[str, Path],
+        output_dir: Optional[Union[str, Path]] = None,
+        overwrite: bool = False,
     ) -> List[Dict[str, Any]]:
         """Process multiple rides from a directory."""
         input_dir = Path(input_dir)
@@ -982,13 +1014,17 @@ class Pipeline:
 
         for input_path in input_paths:
             try:
-                result = self.process_ride(input_path, output_dir)
+                result = self.process_ride(input_path, output_dir, overwrite)
                 results.append(result)
             except Exception as e:
                 self.logger.error(f"Failed to process {input_path}: {str(e)}")
                 continue
 
+        # Count successful and skipped rides
+        successful = sum(1 for r in results if not r.get("skipped", False))
+        skipped = sum(1 for r in results if r.get("skipped", False))
+
         self.logger.info(
-            f"Successfully processed {len(results)} out of {len(input_paths)} rides"
+            f"Successfully processed {successful} rides, skipped {skipped} rides (already exist)"
         )
         return results

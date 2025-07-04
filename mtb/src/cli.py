@@ -50,6 +50,12 @@ Examples:
   
   # Process with custom jump detection
   process --input ride.zip --jump-threshold 2.0 --jump-min-consecutive 3
+  
+  # Force reprocessing of existing files
+  process --input ride.zip --overwrite
+  
+  # Batch process with overwrite
+  process --input {config.DEFAULT_RAW_DIR} --batch --overwrite
         """,
     )
 
@@ -169,6 +175,12 @@ Examples:
         help="Do not save intermediate processing files",
     )
     parser.add_argument(
+        "--overwrite",
+        "-f",
+        action="store_true",
+        help="Overwrite existing output files if they already exist",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose output"
     )
 
@@ -241,13 +253,16 @@ def process_single_ride(args: argparse.Namespace) -> None:
 
         # Process ride
         logger.info(f"Processing single ride: {input_path}")
-        result = pipeline.process_ride(input_path, args.output)
+        result = pipeline.process_ride(input_path, args.output, args.overwrite)
 
-        logger.info("Processing completed successfully!")
-        logger.info(f"Output files:")
-        for file_type, file_path in result["output_files"].items():
-            if file_path:
-                logger.info(f"  {file_type}: {file_path}")
+        if result.get("skipped", False):
+            logger.info("Ride was skipped (output already exists)")
+        else:
+            logger.info("Processing completed successfully!")
+            logger.info(f"Output files:")
+            for file_type, file_path in result["output_files"].items():
+                if file_path:
+                    logger.info(f"  {file_type}: {file_path}")
 
     except (ValueError, DataValidationError, ProcessingError) as e:
         logger.error(f"Processing failed: {str(e)}")
@@ -278,9 +293,17 @@ def process_multiple_rides(args: argparse.Namespace) -> None:
 
         # Process rides
         logger.info(f"Processing multiple rides from: {input_path}")
-        results = pipeline.process_multiple_rides(input_path, args.output)
+        results = pipeline.process_multiple_rides(
+            input_path, args.output, args.overwrite
+        )
 
-        logger.info(f"Batch processing completed! Processed {len(results)} rides")
+        # Count successful and skipped rides
+        successful = sum(1 for r in results if not r.get("skipped", False))
+        skipped = sum(1 for r in results if r.get("skipped", False))
+
+        logger.info(
+            f"Batch processing completed! Processed {successful} rides, skipped {skipped} rides"
+        )
 
     except (ValueError, DataValidationError, ProcessingError) as e:
         logger.error(f"Processing failed: {str(e)}")
