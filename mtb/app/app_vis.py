@@ -5,7 +5,91 @@ import pandas as pd
 import plotly.graph_objects as go
 import os
 import argparse
+import json
+from pathlib import Path
 from dotenv import load_dotenv
+
+
+def create_plot(columns):
+    fig = go.Figure()
+
+    for col in columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=df[col], mode="lines", name=col, hoverinfo="x+y+name"
+            )
+        )
+
+    fig.update_layout(hovermode="x unified")
+    return fig
+
+
+def load_summary_metrics(input_file_path):
+    """Load and format summary metrics from JSON file."""
+    try:
+        # Convert input file path to summary metrics file path
+        input_path = Path(input_file_path)
+        summary_path = input_path.parent / f"{input_path.stem}.json"
+
+        if not summary_path.exists():
+            return None
+
+        with open(summary_path, "r") as f:
+            metrics = json.load(f)
+
+        # Format metrics for display
+        formatted_metrics = {}
+
+        # Duration metrics
+        if "duration_hr" in metrics:
+            formatted_metrics["Total Duration"] = f"{metrics['duration_hr']:.2f} hours"
+        if "duration_moving_hr" in metrics:
+            formatted_metrics["Moving Duration"] = (
+                f"{metrics['duration_moving_hr']:.2f} hours"
+            )
+
+        # Distance and speed metrics
+        if "distance_haversine" in metrics:
+            formatted_metrics["Total Distance"] = (
+                f"{metrics['distance_haversine']:.2f} miles"
+            )
+        if "avg_speed_mph" in metrics:
+            formatted_metrics["Average Speed"] = f"{metrics['avg_speed_mph']:.1f} mph"
+
+        # Elevation metrics
+        if "elevation_gain" in metrics:
+            formatted_metrics["Elevation Gain"] = (
+                f"{metrics['elevation_gain']:.0f} feet"
+            )
+
+        # Intensity metrics
+        if "avg_overall_intensity" in metrics:
+            formatted_metrics["Overall Intensity"] = (
+                f"{metrics['avg_overall_intensity']:.2f} m/s²"
+            )
+        if "avg_cornering_intensity" in metrics:
+            formatted_metrics["Cornering Intensity"] = (
+                f"{metrics['avg_cornering_intensity']:.2f} m/s²"
+            )
+
+        # Jump metrics
+        if "longest_jump_ft" in metrics:
+            formatted_metrics["Longest Jump"] = f"{metrics['longest_jump_ft']:.1f} feet"
+        if "total_jump_airtime_s" in metrics:
+            formatted_metrics["Total Jump Airtime"] = (
+                f"{metrics['total_jump_airtime_s']:.1f} seconds"
+            )
+        if "total_jump_distance_s" in metrics:
+            formatted_metrics["Total Jump Distance"] = (
+                f"{metrics['total_jump_distance_s']:.1f} feet"
+            )
+
+        return formatted_metrics
+
+    except Exception as e:
+        print(f"Error loading summary metrics: {e}")
+        return None
+
 
 load_dotenv()  # Load variables from .env file
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -23,9 +107,10 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# import pytz # timezone converter - unneeded / unused
-
 df = pd.read_parquet(args.input)
+
+# Load summary metrics
+summary_metrics = load_summary_metrics(args.input)
 
 # Edit line below to set index as elapsed_seconds (uncomment) or keep as datetime (comment out):
 df.set_index("elapsed_seconds", drop=True, inplace=True)
@@ -65,62 +150,6 @@ data_sets = {
     "speed": ["speed"],
     "altitude": ["altitude", "altitudeAboveMeanSeaLevel"],
 }
-
-
-# Create the Plotly graph
-def create_plot(columns):
-    fig = go.Figure()
-
-    for col in columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, y=df[col], mode="lines", name=col, hoverinfo="x+y+name"
-            )
-        )
-
-    fig.update_layout(hovermode="x unified")
-    return fig
-
-
-# Could not get the code below to work for custom hover box - %{name} would appear as literal instead of column name
-"""
-def create_plot(columns):
-    fig = go.Figure()
-
-    for i, col in enumerate(columns):
-        
-        
-        # For the first trace, include elapsed_seconds in hovertemplate
-        if i == 0:
-            hovertemplate = (
-                "Elapsed: %{customdata:.1f} s<br>"  # One decimal place
-                "%{name}: %{y}<extra></extra>"
-            )
-        else:
-            # For subsequent traces, omit elapsed_seconds
-            hovertemplate = (
-                "%{name}: %{y}<extra></extra>"
-            )
-
-        fig.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df[col],
-                mode="lines",
-                name=col,
-                # Pass elapsed_seconds (rounded if desired) as customdata
-                customdata=df["elapsed_seconds"].round(1),
-                hoverinfo="skip",
-                hovertemplate=hovertemplate
-            )
-        )
-
-    # Unify the hover so that x (time) is shown only once at the top
-    fig.update_layout(hovermode="x unified") # "x unified" is default
-    return fig
-
-"""
-
 
 app = Dash(__name__)
 
@@ -214,6 +243,24 @@ app.layout = html.Div(
                 dl.ScaleControl(position="bottomleft"),
             ],
         ),
+        # Summary Metrics Section
+        html.Div(
+            [
+                html.H2(
+                    "Summary Metrics",
+                    style={
+                        "textAlign": "center",
+                        "marginTop": "30px",
+                        "marginBottom": "20px",
+                    },
+                ),
+                html.Div(
+                    id="summary-metrics-content",
+                    style={"maxWidth": "800px", "margin": "0 auto", "padding": "20px"},
+                ),
+            ],
+            style={"marginTop": "30px", "marginBottom": "30px"},
+        ),
     ]
 )
 
@@ -260,6 +307,65 @@ def toggle_route_line(toggle_value):
     if "show" in toggle_value:
         return route_positions
     return []
+
+
+# Callback to populate summary metrics
+@app.callback(
+    Output("summary-metrics-content", "children"), Input("dataset-selector", "value")
+)
+def update_summary_metrics(selected_dataset):
+    if summary_metrics is None:
+        return html.Div(
+            "No summary metrics available.",
+            style={
+                "textAlign": "center",
+                "color": "#666",
+                "fontStyle": "italic",
+                "fontSize": "16px",
+            },
+        )
+
+    table_rows = []
+    for metric_name, metric_value in summary_metrics.items():
+        table_rows.append(
+            html.Tr(
+                [
+                    html.Td(
+                        metric_name,
+                        style={
+                            "padding": "12px 20px",
+                            "fontWeight": "bold",
+                            "backgroundColor": "#f8f9fa",
+                            "borderBottom": "1px solid #dee2e6",
+                            "textAlign": "left",
+                        },
+                    ),
+                    html.Td(
+                        metric_value,
+                        style={
+                            "padding": "12px 20px",
+                            "backgroundColor": "white",
+                            "borderBottom": "1px solid #dee2e6",
+                            "textAlign": "right",
+                            "fontFamily": "monospace",
+                            "fontSize": "14px",
+                        },
+                    ),
+                ]
+            )
+        )
+
+    return html.Table(
+        table_rows,
+        style={
+            "width": "100%",
+            "borderCollapse": "collapse",
+            "border": "1px solid #dee2e6",
+            "borderRadius": "8px",
+            "overflow": "hidden",
+            "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
+        },
+    )
 
 
 def main():
