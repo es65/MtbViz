@@ -75,7 +75,6 @@ Once you've recorded a ride (or use one of the files in `data_examples/`):
 
 ```bash
 process --input data/raw/ride.zip && viz data/processed/ride.parquet
-viz
 ```
 (Just replace "ride" with the actual name of your file obviously.)
 
