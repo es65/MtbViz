@@ -4,17 +4,28 @@ import dash_leaflet.express as dlx
 import pandas as pd
 import plotly.graph_objects as go
 import os
+import argparse
 from dotenv import load_dotenv
 
 load_dotenv()  # Load variables from .env file
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
+# Parse command line arguments
+parser = argparse.ArgumentParser(
+    description="MtbViz - Interactive mountain biking data visualization"
+)
+parser.add_argument(
+    "--input",
+    "-i",
+    type=str,
+    default="./data/processed/example_joaquinmiller_241117.parquet",
+    help="Path to the input .parquet file (default: ./data/processed/example_joaquinmiller_241117.parquet)",
+)
+args = parser.parse_args()
+
 # import pytz # timezone converter - unneeded / unused
 
-# Good examples:
-# Briones, many jumps: './data/processed/2025-03-29_23-55-46_5Hz.parquet'
-
-df = pd.read_parquet("./data/processed_250530/2025-03-29_23-55-46_5Hz.parquet")
+df = pd.read_parquet(args.input)
 
 # Edit line below to set index as elapsed_seconds (uncomment) or keep as datetime (comment out):
 df.set_index("elapsed_seconds", drop=True, inplace=True)
@@ -251,6 +262,11 @@ def toggle_route_line(toggle_value):
     return []
 
 
+def main():
+    """Main function to run the Dash app"""
+    app.run_server(debug=True)
+
+
 # Run the Dash app
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    main()

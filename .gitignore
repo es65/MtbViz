@@ -2,7 +2,8 @@
 dev/
 resources/
 
-# Ignore private and development folders
+# Ignore private, development, and data folders
+/data/
 dev/
 private/
 *sandbox*.py

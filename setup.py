@@ -20,6 +20,12 @@ setup(
     install_requires=read_requirements(),
     python_requires=">=3.8",
     include_package_data=True,
+    entry_points={
+        "console_scripts": [
+            "viz=mtb.app.app_vis:main",
+            "process=mtb.src.cli:main",
+        ],
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
