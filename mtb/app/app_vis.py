@@ -108,6 +108,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 df = pd.read_parquet(args.input)
+df = df.dropna(subset=["latitude", "longitude"])
 
 # Load summary metrics
 summary_metrics = load_summary_metrics(args.input)
