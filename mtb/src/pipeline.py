@@ -160,6 +160,41 @@ class DataLoader(BaseProcessor):
         except Exception as e:
             raise ProcessingError(f"Error loading CSV file {file_name}: {str(e)}")
 
+    def _load_from_directory(self, dir_path: Path) -> pd.DataFrame:
+        """Load data from directory containing CSV files."""
+        df = pd.DataFrame()
+
+        for file_path in dir_path.glob("*.csv"):
+            name = file_path.stem
+            if name in self.file_names:
+                df_load = self.load_sl_csv(file_path, str(file_path))
+
+                if df.empty:
+                    df = df_load
+                else:
+                    df = df.merge(df_load, how="outer", on="datetime_PT")
+
+        return df
+
+    def _load_from_zip(self, zip_path: Path) -> pd.DataFrame:
+        """Load data from zip file containing CSV files."""
+        import zipfile
+
+        df = pd.DataFrame()
+
+        with zipfile.ZipFile(zip_path, "r") as z:
+            for filename in z.namelist():
+                if filename.endswith(".csv") and Path(filename).stem in self.file_names:
+                    with z.open(filename) as f:
+                        df_load = self.load_sl_csv(f, filename)
+
+                        if df.empty:
+                            df = df_load
+                        else:
+                            df = df.merge(df_load, how="outer", on="datetime_PT")
+
+        return df
+
     def bin_sensor_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Group sensor readings into time bins and aggregate."""
         try:
@@ -177,7 +212,7 @@ class DataLoader(BaseProcessor):
         except Exception as e:
             raise ProcessingError(f"Error binning sensor data: {str(e)}")
 
-    def process_single_ride(
+    def process(
         self, input_path: Union[str, Path]
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Process a single ride from directory or zip file."""
@@ -237,45 +272,6 @@ class DataLoader(BaseProcessor):
 
         except Exception as e:
             raise ProcessingError(f"Error processing ride {input_path}: {str(e)}")
-
-    def _load_from_directory(self, dir_path: Path) -> pd.DataFrame:
-        """Load data from directory containing CSV files."""
-        df = pd.DataFrame()
-
-        for file_path in dir_path.glob("*.csv"):
-            name = file_path.stem
-            if name in self.file_names:
-                df_load = self.load_sl_csv(file_path, str(file_path))
-
-                if df.empty:
-                    df = df_load
-                else:
-                    df = df.merge(df_load, how="outer", on="datetime_PT")
-
-        return df
-
-    def _load_from_zip(self, zip_path: Path) -> pd.DataFrame:
-        """Load data from zip file containing CSV files."""
-        import zipfile
-
-        df = pd.DataFrame()
-
-        with zipfile.ZipFile(zip_path, "r") as z:
-            for filename in z.namelist():
-                if filename.endswith(".csv") and Path(filename).stem in self.file_names:
-                    with z.open(filename) as f:
-                        df_load = self.load_sl_csv(f, filename)
-
-                        if df.empty:
-                            df = df_load
-                        else:
-                            df = df.merge(df_load, how="outer", on="datetime_PT")
-
-        return df
-
-    def process(self, input_path: Path) -> pd.DataFrame:
-        """Required by BaseProcessor. Might remove or reworking naming."""
-        raise NotImplementedError("Use process_single_ride method instead")
 
 
 class FeatureBuilder(BaseProcessor):
@@ -920,7 +916,7 @@ class Pipeline:
 
             # Step 1: Load and preprocess data
             self.logger.info("Step 1: Loading and preprocessing data...")
-            raw_df, resampled_df = self.data_loader.process_single_ride(input_path)
+            raw_df, resampled_df = self.data_loader.process(input_path)
 
             # Save intermediate results if requested
             if self.config.save_intermediate:

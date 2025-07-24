@@ -102,9 +102,9 @@ process --input ride.zip --jump-threshold 2.0 --jump-min-consecutive 3
 - `--output, -o`: Output directory (default: `data/processed`)
 - `--batch, -b`: Process all rides in input directory
 - `--overwrite, -f`: Reprocess and overwrite existing output files
-- `--downsample-freq`: Resample frequency in Hz (default: 5)
+- `--downsample-freq`: Resample frequency in Hz
 - `--verbose, -v`: Enable detailed logging
-- `--jump-threshold`: Jump detection threshold (default: from config)
+- `--jump-threshold`: Jump detection threshold
 - `--jump-min-consecutive`: Minimum consecutive points for jump detection
 
 #### Python API

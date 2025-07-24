@@ -34,3 +34,5 @@ ipykernel==6.29.4
 
 # Optional:
 # folium==0.18.0 
+# openpyxl==3.1.5
+# fitparse==1.2.0
