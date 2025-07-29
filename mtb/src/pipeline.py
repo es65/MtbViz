@@ -73,6 +73,10 @@ class ProcessingConfig:
     distance_smooth_window: int = config.DEFAULT_DISTANCE_SMOOTH_WINDOW
     elevation_smooth_window: int = config.DEFAULT_ELEVATION_SMOOTH_WINDOW
     elevation_threshold: float = config.DEFAULT_ELEVATION_THRESHOLD
+    elevation_segments_window_size: int = config.DEFAULT_ELEVATION_SEGMENTS_WINDOW_SIZE
+    elevation_segments_distance: int = config.DEFAULT_ELEVATION_SEGMENTS_DISTANCE
+    elevation_segments_prominence: int = config.DEFAULT_ELEVATION_SEGMENTS_PROMINENCE
+    elevation_segments_gain_min_m: float = config.DEFAULT_ELEVATION_SEGMENTS_GAIN_MIN_M
     speed_threshold: float = config.DEFAULT_SPEED_THRESHOLD
 
     # Output settings
@@ -573,6 +577,57 @@ class MetricsCalculator(BaseProcessor):
         except Exception as e:
             raise ProcessingError(f"Error calculating elevation gain: {str(e)}")
 
+    def calculate_elevation_gain_segments(
+        self,
+        df: pd.DataFrame,
+        alt_col: str = "altitude",
+        gain_min_m: float = 1.0,
+    ) -> float:
+        """Segment-based elevation gain calculation."""
+
+        df = df.copy()
+
+        df["smoothed_alt"] = (
+            df[alt_col]
+            .rolling(
+                self.config.elevation_segments_window_size, center=True, min_periods=1
+            )
+            .median()
+        )
+
+        from scipy.signal import find_peaks
+
+        # Find peaks (maxima) and valleys (minima)
+        peaks, _ = find_peaks(
+            df["smoothed_alt"],
+            distance=self.config.elevation_segments_distance,
+            prominence=self.config.elevation_segments_prominence,
+        )
+        valleys, _ = find_peaks(
+            -df["smoothed_alt"],
+            distance=self.config.elevation_segments_distance,
+            prominence=self.config.elevation_segments_prominence,
+        )
+
+        # Combine and sort turning points
+        turning_points = sorted(list(peaks) + list(valleys))
+
+        # Calculate elevation gain between consecutive turning points
+        total_gain = 0
+        for i in range(1, len(turning_points)):
+            start_idx = turning_points[i - 1]
+            end_idx = turning_points[i]
+
+            start_alt = df.iloc[start_idx]["smoothed_alt"]
+            end_alt = df.iloc[end_idx]["smoothed_alt"]
+
+            if end_alt > start_alt:
+                gain = end_alt - start_alt
+                if gain > self.config.elevation_segments_gain_min_m:
+                    total_gain += gain
+
+        return total_gain / self.config.ft_to_m
+
     def calculate_duration_hr(
         self, df: pd.DataFrame, x_col: str = "elapsed_seconds"
     ) -> float:
@@ -824,7 +879,9 @@ class MetricsCalculator(BaseProcessor):
             summary_metrics["distance_haversine"] = (
                 self.calculate_distance_haversine_mi(df)
             )
-            summary_metrics["elevation_gain"] = self.calculate_elevation_gain_ft(df)
+            summary_metrics["elevation_gain"] = self.calculate_elevation_gain_segments(
+                df
+            )
             summary_metrics["avg_speed_mph"] = self.calculate_avg_speed_moving_mph(
                 df_moving
             )
