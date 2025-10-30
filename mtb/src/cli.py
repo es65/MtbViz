@@ -39,21 +39,24 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
 Examples:
-  # Process a single ride
+  # Process a single ride from file
   process --input {config.DEFAULT_RAW_DIR}/ride.zip --output {config.DEFAULT_PROCESSED_DIR}
-  
+
+  # Process a ride from database
+  process --from-db --ride-id 12345678-1234-1234-1234-123456789abc --output {config.DEFAULT_PROCESSED_DIR}
+
   # Process all rides in a directory
   process --input {config.DEFAULT_RAW_DIR} --output {config.DEFAULT_PROCESSED_DIR} --batch
-  
+
   # Process with custom settings
   process --input ride.zip --downsample-freq 10 --no-lead-lag --verbose
-  
+
   # Process with custom jump detection
   process --input ride.zip --jump-threshold 2.0 --jump-min-consecutive 3
-  
+
   # Force reprocessing of existing files
   process --input ride.zip --overwrite
-  
+
   # Batch process with overwrite
   process --input {config.DEFAULT_RAW_DIR} --batch --overwrite
         """,
@@ -64,8 +67,17 @@ Examples:
         "--input",
         "-i",
         type=str,
-        required=True,
         help="Input path: zip file, directory, or folder containing rides",
+    )
+    parser.add_argument(
+        "--from-db",
+        action="store_true",
+        help="Load ride data from database instead of files",
+    )
+    parser.add_argument(
+        "--ride-id",
+        type=str,
+        help="Ride UUID to load from database (required with --from-db)",
     )
     parser.add_argument(
         "--output",
@@ -238,9 +250,6 @@ def validate_input_path(input_path: str) -> Path:
 def process_single_ride(args: argparse.Namespace) -> None:
     """Process a single ride."""
     try:
-        # Validate input
-        input_path = validate_input_path(args.input)
-
         # Create config
         config = create_config_from_args(args)
 
@@ -248,12 +257,29 @@ def process_single_ride(args: argparse.Namespace) -> None:
         setup_logging(config.verbose)
         logger = logging.getLogger(__name__)
 
+        # Validate input
+        if args.from_db:
+            if not args.ride_id:
+                raise ValueError("--ride-id is required when using --from-db")
+            if args.input:
+                raise ValueError("Cannot specify both --from-db and --input")
+            logger.info(f"Processing ride from database: {args.ride_id}")
+            input_path = None
+            ride_id = args.ride_id
+        else:
+            if not args.input:
+                raise ValueError("Either --input or --from-db must be specified")
+            input_path = validate_input_path(args.input)
+            ride_id = None
+            logger.info(f"Processing single ride: {input_path}")
+
         # Create pipeline
         pipeline = Pipeline(config)
 
         # Process ride
-        logger.info(f"Processing single ride: {input_path}")
-        result = pipeline.process_ride(input_path, args.output, args.overwrite)
+        result = pipeline.process_ride(
+            input_path=input_path, ride_id=ride_id, output_dir=args.output, overwrite=args.overwrite
+        )
 
         if result.get("skipped", False):
             logger.info("Ride was skipped (output already exists)")
@@ -317,6 +343,10 @@ def main() -> None:
     """Main CLI entry point."""
     parser = create_parser()
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.from_db and args.batch:
+        parser.error("--from-db cannot be used with --batch")
 
     # Process the ride(s) based on batch flag
     if args.batch:

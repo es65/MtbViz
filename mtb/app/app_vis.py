@@ -10,17 +10,153 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-def create_plot(columns):
+def resample_dataframe(data, x_range=None, max_points=2000):
+    """
+    Intelligently resample dataframe based on visible x-axis range.
+
+    Args:
+        data: DataFrame to resample
+        x_range: Tuple of (min, max) for x-axis range, or None for full range
+        max_points: Maximum number of points to show
+
+    Returns:
+        Tuple of (resampled DataFrame, original filtered count)
+    """
+    try:
+        if x_range is not None:
+            # Filter to visible range
+            x_min, x_max = x_range
+
+            # Convert range values to match index type if needed
+            if isinstance(data.index, pd.DatetimeIndex):
+                x_min = pd.to_datetime(x_min)
+                x_max = pd.to_datetime(x_max)
+
+            mask = (data.index >= x_min) & (data.index <= x_max)
+            filtered_data = data[mask]
+        else:
+            filtered_data = data
+
+        # Store original filtered count before resampling
+        original_count = len(filtered_data)
+
+        # If already under max_points, return as-is
+        if len(filtered_data) <= max_points:
+            return filtered_data, original_count
+
+        # Handle edge case of very small data
+        if len(filtered_data) < 2:
+            return filtered_data, original_count
+
+        # Calculate stride for downsampling
+        stride = max(1, len(filtered_data) // max_points)
+
+        # Use LTTB-like approach: keep first, last, and evenly distributed points
+        indices = []
+
+        # Always include first point
+        indices.append(0)
+
+        # Sample points with stride
+        for i in range(stride, len(filtered_data) - stride, stride):
+            indices.append(i)
+
+        # Always include last point
+        if len(filtered_data) - 1 not in indices:
+            indices.append(len(filtered_data) - 1)
+
+        return filtered_data.iloc[indices], original_count
+
+    except Exception as e:
+        print(f"Error in resample_dataframe: {e}")
+        # If resampling fails, return original data
+        return data, len(data)
+
+
+def create_plot(columns, data_to_plot=None, show_markers=False, view_total_points=None):
+    """
+    Create a plotly figure with the specified columns.
+
+    Args:
+        columns: List of column names to plot
+        data_to_plot: DataFrame to use for plotting (if None, uses global df)
+        show_markers: Whether to show markers on the lines
+        view_total_points: Total points in current view before resampling (if None, uses len(df))
+    """
     fig = go.Figure()
 
-    for col in columns:
+    # Use provided data or fall back to global df
+    plot_data = data_to_plot if data_to_plot is not None else df
+
+    # Filter to only columns that exist in the dataframe
+    available_columns = [col for col in columns if col in df.columns]
+
+    # Set mode based on marker preference
+    mode = "lines+markers" if show_markers else "lines"
+    marker_dict = dict(size=4) if show_markers else None
+
+    for col in available_columns:
         fig.add_trace(
             go.Scatter(
-                x=df.index, y=df[col], mode="lines", name=col, hoverinfo="x+y+name"
+                x=plot_data.index,
+                y=plot_data[col],
+                mode=mode,
+                name=col,
+                hoverinfo="x+y+name",
+                marker=marker_dict,
             )
         )
 
-    fig.update_layout(hovermode="x unified")
+    fig.update_layout(
+        hovermode="x unified",
+        uirevision="constant",  # Preserve UI state (zoom/pan) across updates
+    )
+
+    # Add annotations for data status
+    annotations = []
+    annotation_y_pos = 1.05
+
+    # Add a note if some columns were missing
+    if len(available_columns) < len(columns):
+        missing_cols = [col for col in columns if col not in df.columns]
+        annotations.append(
+            dict(
+                text=f"Note: {len(missing_cols)} column(s) not available in data",
+                xref="paper",
+                yref="paper",
+                x=0.5,
+                y=annotation_y_pos,
+                showarrow=False,
+                font=dict(size=10, color="orange"),
+            )
+        )
+        annotation_y_pos += 0.05
+
+    # Add resampling info even if all data shown:
+    total_points_in_view = (
+        view_total_points if view_total_points is not None else len(df)
+    )
+    shown_points = len(plot_data)
+
+    sampling_ratio = shown_points / total_points_in_view * 100
+    annotations.append(
+        dict(
+            text=f"Showing {shown_points:,} of {total_points_in_view:,} points in view ({sampling_ratio:.1f}%) - Zoom in for more detail",
+            xref="paper",
+            yref="paper",
+            x=0.02,
+            y=0.98,
+            xanchor="left",
+            yanchor="top",
+            showarrow=False,
+            font=dict(size=9, color="gray"),
+            bgcolor="rgba(255, 255, 255, 0.8)",
+        )
+    )
+
+    if annotations:
+        fig.update_layout(annotations=annotations)
+
     return fig
 
 
@@ -105,7 +241,18 @@ parser.add_argument(
     default="./data/processed/example_joaquinmiller_241117.parquet",
     help="Path to the input .parquet file (default: ./data/processed/example_joaquinmiller_241117.parquet)",
 )
+parser.add_argument(
+    "--port",
+    "-p",
+    type=int,
+    default=8050,
+    help="Port to run the Dash app on (default: 8050)",
+)
 args = parser.parse_args()
+
+# Extract ride name from input file path
+input_path = Path(args.input)
+ride_name = input_path.stem  # Gets filename without extension
 
 df = pd.read_parquet(args.input)
 df = df.dropna(subset=["latitude", "longitude"])
@@ -134,23 +281,47 @@ bounds = [
 ]
 
 data_sets = {
-    "accel, device": ["ax_device", "ay_device", "az_device", "ar"],
-    "accel, earth": ["ax_e", "ay_e", "az_e", "ar"],
+    # "accel, device": ["ax_device", "ay_device", "az_device", "ar"],
+    # "accel, earth": ["ax_e", "ay_e", "az_e", "ar"],
     "accel, uncalib, device": [
         "ax_uc_device",
         "ay_uc_device",
         "az_uc_device",
-        "ar_uc",
+        "ar",
     ],
-    "accel, uncalib, earth": ["ax_uc_e", "ay_uc_e", "az_uc_e", "ar_uc"],  # default
+    "accel, uncalib, earth": [
+        "ax_uc_e",
+        "ay_uc_e",
+        "az_uc_e",
+        "ar",
+        "ah_uc_e",
+    ],  # default
     "gyro, device": ["gx_device", "gy_device", "gz_device", "gr"],
     "gyro, earth": ["gx_e", "gy_e", "gz_e", "gr"],
-    "gravity, device": ["gFx_device", "gFy_device", "gFz_device", "gFr"],
-    "gravity, earth": ["gFx_e", "gFy_e", "gFz_e", "gFr"],
+    # "gravity, earth": ["gFx_e", "gFy_e", "gFz_e", "gFr"],
     "orientation": ["qx", "qy", "qz", "yaw", "roll", "pitch"],
     "speed": ["speed"],
-    "altitude": ["altitude", "altitudeAboveMeanSeaLevel"],
+    "altitude": ["altitude"],
 }
+
+# Filter datasets to only include those with at least one available column
+available_data_sets = {
+    key: cols
+    for key, cols in data_sets.items()
+    if any(col in df.columns for col in cols)
+}
+
+# Select default dataset (prefer the original default if available, otherwise pick the first available)
+default_dataset = (
+    "accel, uncalib, earth"
+    if "accel, uncalib, earth" in available_data_sets
+    else list(available_data_sets.keys())[0] if available_data_sets else None
+)
+
+if not available_data_sets:
+    print("Warning: No data sets have available columns in the dataframe")
+    available_data_sets = {"speed": ["speed"]}  # Fallback
+    default_dataset = "speed"
 
 app = Dash(__name__)
 
@@ -159,7 +330,25 @@ app.layout = html.Div(
     [
         # html.H1("Interactive Plotly Graph and Leaflet Map"),
         dcc.Graph(
-            id="plotly-graph", figure=create_plot(data_sets["accel, uncalib, earth"])
+            id="plotly-graph", figure=create_plot(available_data_sets[default_dataset])
+        ),
+        # Ride title at top left
+        html.Div(
+            html.H2(
+                ride_name,
+                style={
+                    "margin": "0",
+                    "fontSize": "20px",
+                    "fontWeight": "600",
+                    "color": "#2c3e50",
+                },
+            ),
+            style={
+                "position": "absolute",
+                "top": "10px",
+                "left": "20px",
+                "zIndex": "1000",
+            },
         ),
         html.Div(
             [
@@ -168,9 +357,9 @@ app.layout = html.Div(
                     id="dataset-selector",
                     options=[
                         {"label": key.capitalize(), "value": key}
-                        for key in data_sets.keys()
+                        for key in available_data_sets.keys()
                     ],
-                    value="accel, uncalib, earth",  # Default dataset
+                    value=default_dataset,  # Default dataset
                     clearable=False,
                     style={"width": "200px"},
                 ),
@@ -209,7 +398,7 @@ app.layout = html.Div(
                 html.Label("Show Route:"),
                 dcc.Checklist(
                     id="route-toggle",
-                    options=[{"label": "Show", "value": "show"}],
+                    options=[{"label": "", "value": "show"}],
                     value=["show"],  # Default to showing the route
                     style={"display": "inline-block"},  # , "margin-left": "10px"}
                 ),
@@ -218,6 +407,23 @@ app.layout = html.Div(
                 "position": "absolute",
                 "top": "10px",
                 "right": "280px",
+                "zIndex": "1000",
+            },
+        ),
+        html.Div(
+            [
+                html.Label("Show Markers:"),
+                dcc.Checklist(
+                    id="marker-toggle",
+                    options=[{"label": "", "value": "show"}],
+                    value=[],  # Default to not showing markers
+                    style={"display": "inline-block"},
+                ),
+            ],
+            style={
+                "position": "absolute",
+                "top": "10px",
+                "right": "80px",
                 "zIndex": "1000",
             },
         ),
@@ -266,11 +472,63 @@ app.layout = html.Div(
 )
 
 
-# Callback to update the graph based on dataset selection
-@app.callback(Output("plotly-graph", "figure"), Input("dataset-selector", "value"))
-def update_graph(selected_dataset):
-    columns = data_sets[selected_dataset]
-    return create_plot(columns)
+# Callback to update the graph based on dataset selection, marker toggle, and zoom level
+@app.callback(
+    Output("plotly-graph", "figure"),
+    Input("dataset-selector", "value"),
+    Input("marker-toggle", "value"),
+    Input("plotly-graph", "relayoutData"),
+)
+def update_graph(selected_dataset, marker_toggle, relayout_data):
+    """
+    Update graph with resampling based on zoom level.
+
+    When zoomed out, shows fewer points for performance.
+    When zoomed in, shows more detail up to full resolution.
+    """
+    columns = available_data_sets[selected_dataset]
+    show_markers = "show" in marker_toggle
+
+    # Extract x-axis range from relayout data
+    x_range = None
+    if relayout_data is not None:
+        # Handle different relayout event types
+        if "xaxis.range[0]" in relayout_data and "xaxis.range[1]" in relayout_data:
+            x_range = (relayout_data["xaxis.range[0]"], relayout_data["xaxis.range[1]"])
+        elif "xaxis.range" in relayout_data:
+            x_range = tuple(relayout_data["xaxis.range"])
+
+    # Determine max_points based on zoom level and markers
+    # When markers are enabled, use fewer points for better performance
+    # When zoomed in significantly, allow more points
+    if x_range is not None:
+        visible_ratio = (x_range[1] - x_range[0]) / (df.index.max() - df.index.min())
+        # More zoom = more points allowed
+        if visible_ratio < 0.01:  # Very zoomed in (< 1% of data visible)
+            max_points = 5000
+        elif visible_ratio < 0.1:  # Moderately zoomed in (< 10%)
+            max_points = 3000
+        else:
+            max_points = 2000
+    else:
+        # Default: show full view with moderate point count
+        max_points = 1500
+
+    # Further reduce points if markers are enabled
+    if show_markers:
+        max_points = min(max_points, 2000)
+
+    # Resample the dataframe
+    resampled_df, view_total = resample_dataframe(
+        df, x_range=x_range, max_points=max_points
+    )
+
+    return create_plot(
+        columns,
+        data_to_plot=resampled_df,
+        show_markers=show_markers,
+        view_total_points=view_total,
+    )
 
 
 # Callback to update the marker position
@@ -371,7 +629,7 @@ def update_summary_metrics(selected_dataset):
 
 def main():
     """Main function to run the Dash app"""
-    app.run_server(debug=True)
+    app.run_server(host="0.0.0.0", port=args.port, debug=True)
 
 
 # Run the Dash app

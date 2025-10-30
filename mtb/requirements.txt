@@ -32,7 +32,13 @@ python-dotenv==1.0.0
 nbformat==5.10.4
 ipykernel==6.29.4
 
+# Database
+sqlalchemy>=2.0.25
+alembic>=1.13.1
+psycopg2-binary==2.9.9
+
 # Optional:
 # folium==0.18.0 
 # openpyxl==3.1.5
 # fitparse==1.2.0
+# scikit-optimize==0.10.2

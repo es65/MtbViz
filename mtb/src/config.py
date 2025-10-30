@@ -6,7 +6,48 @@ mile_to_ft = 5280  # ft/mile
 mile_to_m = 1609.34  # m/mile
 ft_to_m = 0.3048  # m/ft
 
-# make_dataset_sl:
+
+# loading from postgresql database:
+
+db_table_cols = {
+    "accel_device": ["ts", "x", "y", "z"],
+    "gyro_device": ["ts", "x", "y", "z"],
+    "orientation": ["ts", "qw", "qx", "qy", "qz"],
+    "location": [
+        "ts",
+        "latitude",
+        "longitude",
+        "altitude",
+        "speed",
+        "bearing",
+        "horizontal_accuracy",
+        "vertical_accuracy",
+        "speed_accuracy",
+        "bearing_accuracy",
+    ],
+}
+
+db_col_rename_maps = {
+    "accel_device": {
+        "x": "ax_uc_device",
+        "y": "ay_uc_device",
+        "z": "az_uc_device",
+    },
+    "gyro_device": {
+        "x": "gx_device",
+        "y": "gy_device",
+        "z": "gz_device",
+    },
+    "location": {
+        "horizontal_accuracy": "horizontalAccuracy",
+        "vertical_accuracy": "verticalAccuracy",
+        "speed_accuracy": "speedAccuracy",
+        "bearing_accuracy": "bearingAccuracy",
+    },
+}
+
+
+# Sensor Logger CSV files:
 
 sl_file_names = [
     "Location",
@@ -52,6 +93,7 @@ interp_cols = [
     "speed",
     "speedAccuracy",
     "relativeAltitude",
+    "relative_altitude",
     "pressure",
 ]
 

@@ -21,8 +21,11 @@ import pandas as pd
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from haversine import haversine, Unit
+from sqlalchemy import text
+from uuid import UUID
 
 from mtb.src import config
+from mtb.db.session import SessionLocal
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -199,6 +202,78 @@ class DataLoader(BaseProcessor):
 
         return df
 
+    def _load_from_database(self, ride_id: Union[str, UUID]) -> pd.DataFrame:
+        """Load data from PostgreSQL database for a specific ride."""
+        if isinstance(ride_id, str):
+            ride_id = UUID(ride_id)
+
+        db = SessionLocal()
+        df = pd.DataFrame()
+
+        try:
+            for table_name, columns in config.db_table_cols.items():
+                # Build query to select specific columns
+                cols_str = ", ".join(columns)
+                query = text(
+                    f"""
+                    SELECT {cols_str}
+                    FROM {table_name}
+                    WHERE ride_id = :ride_id
+                    ORDER BY ts
+                """
+                )
+
+                # Execute query and load into dataframe
+                df_table = pd.read_sql(
+                    query, db.connection(), params={"ride_id": str(ride_id)}
+                )
+
+                if df_table.empty:
+                    self.logger.warning(
+                        f"No data found in table {table_name} for ride {ride_id}"
+                    )
+                    continue
+
+                if self.config.verbose:
+                    self.logger.info(f"{table_name} df shape: {df_table.shape}")
+
+                # Convert timestamp to datetime with timezone
+                df_table["datetime_PT"] = pd.to_datetime(
+                    df_table["ts"], utc=True
+                ).dt.tz_convert(self.config.timezone)
+                df_table.set_index("datetime_PT", inplace=True)
+
+                # Drop the ts column
+                df_table.drop("ts", axis=1, inplace=True)
+
+                # Rename columns according to mapping
+                if table_name in config.db_col_rename_maps:
+                    df_table.rename(
+                        columns=config.db_col_rename_maps[table_name], inplace=True
+                    )
+
+                # Merge with existing dataframe
+                if df.empty:
+                    df = df_table
+                else:
+                    df = df.merge(
+                        df_table, how="outer", left_index=True, right_index=True
+                    )
+
+            if df.empty:
+                raise DataValidationError(
+                    f"No valid data found in database for ride {ride_id}"
+                )
+
+            return df
+
+        except Exception as e:
+            raise ProcessingError(
+                f"Error loading data from database for ride {ride_id}: {str(e)}"
+            )
+        finally:
+            db.close()
+
     def bin_sensor_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Group sensor readings into time bins and aggregate."""
         try:
@@ -217,29 +292,47 @@ class DataLoader(BaseProcessor):
             raise ProcessingError(f"Error binning sensor data: {str(e)}")
 
     def process(
-        self, input_path: Union[str, Path]
+        self,
+        input_path: Optional[Union[str, Path]] = None,
+        ride_id: Optional[Union[str, UUID]] = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Process a single ride from directory or zip file."""
-        start_time = time.perf_counter()
-        input_path = Path(input_path)
+        """Process a single ride from directory, zip file, or database.
 
-        self.logger.info(f"Processing ride: {input_path.name}")
+        Args:
+            input_path: Path to directory or zip file containing CSV files
+            ride_id: UUID of ride in database (mutually exclusive with input_path)
+        """
+        start_time = time.perf_counter()
+
+        # Validate that exactly one input method is provided
+        if input_path is None and ride_id is None:
+            raise ValueError("Either input_path or ride_id must be provided")
+        if input_path is not None and ride_id is not None:
+            raise ValueError("Cannot specify both input_path and ride_id")
 
         df = pd.DataFrame()
 
         try:
+            # Load data from database
+            if ride_id is not None:
+                self.logger.info(f"Processing ride from database: {ride_id}")
+                df = self._load_from_database(ride_id)
             # Load data from directory or zip file
-            if input_path.is_dir():
-                df = self._load_from_directory(input_path)
-            elif input_path.suffix.lower() == ".zip":
-                df = self._load_from_zip(input_path)
             else:
-                raise DataValidationError(
-                    f"Input path must be a directory or zip file: {input_path}"
-                )
+                input_path = Path(input_path)
+                self.logger.info(f"Processing ride: {input_path.name}")
+
+                if input_path.is_dir():
+                    df = self._load_from_directory(input_path)
+                elif input_path.suffix.lower() == ".zip":
+                    df = self._load_from_zip(input_path)
+                else:
+                    raise DataValidationError(
+                        f"Input path must be a directory or zip file: {input_path}"
+                    )
 
             if df.empty:
-                raise DataValidationError("No valid data found in input files")
+                raise DataValidationError("No valid data found in input source")
 
             # Add elapsed seconds
             df.insert(0, "elapsed_seconds", (df.index - df.index[0]).total_seconds())
@@ -264,7 +357,7 @@ class DataLoader(BaseProcessor):
 
             # Drop NaN values if requested
             if self.config.dropna_resampled:
-                df_resampled.dropna(subset=["ax_device", "gx_device"], inplace=True)
+                df_resampled.dropna(subset=["ax_uc_device", "gx_device"], inplace=True)
 
             self.log_processing_time(start_time, "Data loading")
 
@@ -295,11 +388,23 @@ class FeatureBuilder(BaseProcessor):
             if not inplace:
                 df = df.copy()
 
-            for cols, mag_col in self.magnitude_mapper.items():
-                if all(col in df.columns for col in cols):
-                    df[mag_col] = np.sqrt(
-                        df[cols[0]] ** 2 + df[cols[1]] ** 2 + df[cols[2]] ** 2
-                    )
+            gyro_cols = ["gx_e", "gy_e", "gz_e"]
+            accel_cols = ["ax_uc_e", "ay_uc_e", "az_uc_e"]
+
+            if all(col in df.columns for col in gyro_cols):
+                df["gr"] = np.sqrt(df["gx_e"] ** 2 + df["gy_e"] ** 2 + df["gz_e"] ** 2)
+            else:
+                logger.warning("Columns missing, no gyroscope magnitude calculated")
+
+            if all(col in df.columns for col in accel_cols):
+                df["ar"] = np.sqrt(
+                    df["ax_uc_e"] ** 2
+                    + df["ay_uc_e"] ** 2
+                    + (df["az_uc_e"] + config.g) ** 2
+                )
+                df["ah_e"] = np.sqrt(df["ax_uc_e"] ** 2 + df["ay_uc_e"] ** 2)
+            else:
+                logger.warning("Columns missing, no acceleration magnitude calculated")
 
             return df if not inplace else None
 
@@ -317,8 +422,10 @@ class FeatureBuilder(BaseProcessor):
             acc_uc_dev_cols = ["ax_uc_device", "ay_uc_device", "az_uc_device"]
             gyr_dev_cols = ["gx_device", "gy_device", "gz_device"]
 
-            required_cols = quat_cols + acc_dev_cols + acc_uc_dev_cols + gyr_dev_cols
+            required_cols = quat_cols + acc_uc_dev_cols + gyr_dev_cols
             self.validate_input(df, required_cols)
+
+            acc_dev_cols = [col for col in acc_dev_cols if col in df.columns]
 
             if not inplace:
                 df = df.copy()
@@ -327,25 +434,27 @@ class FeatureBuilder(BaseProcessor):
             quaternions = df[quat_cols].values
 
             # Extract sensor data in device coordinates
-            acc_device = df[acc_dev_cols].values
             acc_uc_device = df[acc_uc_dev_cols].values
+            if acc_dev_cols:
+                acc_device = df[acc_dev_cols].values
             gyr_device = df[gyr_dev_cols].values
 
             # Create Rotation objects from quaternions
             rotations = R.from_quat(quaternions)
 
             # Rotate sensor data to the world frame
-            acc_e = rotations.apply(acc_device)
+            if acc_dev_cols:
+                acc_e = rotations.apply(acc_device)
             acc_uc_e = rotations.apply(acc_uc_device)
             gyr_e = rotations.apply(gyr_device)
 
             # Add transformed data to DataFrame
-            df[["ax_e", "ay_e", "az_e"]] = acc_e
+            if acc_dev_cols:
+                df[["ax_e", "ay_e", "az_e"]] = acc_e
             df[["ax_uc_e", "ay_uc_e", "az_uc_e"]] = acc_uc_e
             df[["gx_e", "gy_e", "gz_e"]] = gyr_e
 
             # Add horizontal acceleration magnitudes
-            df["ah_e"] = np.sqrt(df["ax_e"] ** 2 + df["ay_e"] ** 2)
             df["ah_uc_e"] = np.sqrt(df["ax_uc_e"] ** 2 + df["ay_uc_e"] ** 2)
 
             return df if not inplace else None
@@ -443,30 +552,19 @@ class FeatureBuilder(BaseProcessor):
         start_time = time.perf_counter()
 
         try:
-            # Validate required columns
-            required_cols = [
-                "ax_device",
-                "ay_device",
-                "az_device",
-                "qx",
-                "qy",
-                "qz",
-                "qw",
-            ]
-            self.validate_input(df, required_cols)
 
             if df.empty:
                 raise DataValidationError("Input DataFrame is empty")
 
             self.logger.info(f"Processing DataFrame with shape: {df.shape}")
 
-            # Add magnitude columns
-            self.logger.info("Adding magnitude columns...")
-            self.add_magnitude_cols(df, inplace=True)
-
             # Transform to world frame
             self.logger.info("Transforming to world frame...")
             self.transform_to_world_frame(df, inplace=True)
+
+            # Add magnitude columns
+            self.logger.info("Adding magnitude columns...")
+            self.add_magnitude_cols(df, inplace=True)
 
             # Identify jumps
             self.logger.info("Identifying jumps...")
@@ -800,8 +898,8 @@ class MetricsCalculator(BaseProcessor):
             if missing_cols:
                 raise DataValidationError(f"Required columns not found: {missing_cols}")
 
-            top_3_boosts = df_moving.nlargest(3, "az_e")[cols + ["az_e"]]
-            top_3_landings = df_moving.nsmallest(3, "az_e")[cols + ["az_e"]]
+            top_3_boosts = df_moving.nlargest(3, "az_uc_e")[cols + ["az_uc_e"]]
+            top_3_landings = df_moving.nsmallest(3, "az_uc_e")[cols + ["az_uc_e"]]
             top_3_corners = df_moving.loc[df_moving["ah_e"].abs().nlargest(3).index][
                 cols + ["ah_e"]
             ]
@@ -924,13 +1022,33 @@ class Pipeline:
 
     def process_ride(
         self,
-        input_path: Union[str, Path],
+        input_path: Optional[Union[str, Path]] = None,
+        ride_id: Optional[Union[str, UUID]] = None,
         output_dir: Optional[Union[str, Path]] = None,
         overwrite: bool = False,
     ) -> Dict[str, Any]:
-        """Process a single ride through the entire pipeline."""
+        """Process a single ride through the entire pipeline.
+
+        Args:
+            input_path: Path to directory or zip file containing CSV files
+            ride_id: UUID of ride in database (mutually exclusive with input_path)
+            output_dir: Directory for output files
+            overwrite: Whether to overwrite existing files
+        """
         start_time = time.perf_counter()
-        input_path = Path(input_path)
+
+        # Validate that exactly one input method is provided
+        if input_path is None and ride_id is None:
+            raise ValueError("Either input_path or ride_id must be provided")
+        if input_path is not None and ride_id is not None:
+            raise ValueError("Cannot specify both input_path and ride_id")
+
+        # Determine output filename stem
+        if ride_id is not None:
+            filename_stem = str(ride_id)
+        else:
+            input_path = Path(input_path)
+            filename_stem = input_path.stem
 
         if output_dir is None:
             output_dir = Path(self.config.processed_dir)
@@ -940,8 +1058,8 @@ class Pipeline:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if output files already exist
-        processed_output_path = output_dir / f"{input_path.stem}.parquet"
-        summary_output_path = output_dir / f"{input_path.stem}.json"
+        processed_output_path = output_dir / f"{filename_stem}.parquet"
+        summary_output_path = output_dir / f"{filename_stem}.json"
 
         if processed_output_path.exists() and not overwrite:
             self.logger.info(f"Output file already exists: {processed_output_path}")
@@ -960,8 +1078,8 @@ class Pipeline:
                     "processed": processed_output_path,
                     "summary": summary_output_path,
                     "jumps": (
-                        output_dir / f"{input_path.stem}_jumps.parquet"
-                        if (output_dir / f"{input_path.stem}_jumps.parquet").exists()
+                        output_dir / f"{filename_stem}_jumps.parquet"
+                        if (output_dir / f"{filename_stem}_jumps.parquet").exists()
                         else None
                     ),
                 },
@@ -969,18 +1087,23 @@ class Pipeline:
             }
 
         try:
-            self.logger.info(f"Starting pipeline for: {input_path.name}")
+            if ride_id is not None:
+                self.logger.info(f"Starting pipeline for ride: {ride_id}")
+            else:
+                self.logger.info(f"Starting pipeline for: {input_path.name}")
 
             # Step 1: Load and preprocess data
             self.logger.info("Step 1: Loading and preprocessing data...")
-            raw_df, resampled_df = self.data_loader.process(input_path)
+            raw_df, resampled_df = self.data_loader.process(
+                input_path=input_path, ride_id=ride_id
+            )
 
             # Save intermediate results if requested
             if self.config.save_intermediate:
-                raw_output_path = output_dir / f"{input_path.stem}_raw.parquet"
+                raw_output_path = output_dir / f"{filename_stem}_raw.parquet"
                 resampled_output_path = (
                     output_dir
-                    / f"{input_path.stem}_{self.config.downsample_freq}Hz.parquet"
+                    / f"{filename_stem}_{self.config.downsample_freq}Hz.parquet"
                 )
 
                 raw_df.to_parquet(raw_output_path)
@@ -990,6 +1113,8 @@ class Pipeline:
             # Step 2: Build features
             self.logger.info("Step 2: Building features...")
             processed_df = self.feature_builder.process(resampled_df)
+
+            print(processed_df.columns)
 
             # Save processed data
             processed_df.to_parquet(processed_output_path)
@@ -1005,7 +1130,7 @@ class Pipeline:
                 json.dump(metrics_results["summary_metrics"], f, indent=4)
 
             if metrics_results["jump_events_df"] is not None:
-                jumps_output_path = output_dir / f"{input_path.stem}_jumps.parquet"
+                jumps_output_path = output_dir / f"{filename_stem}_jumps.parquet"
                 metrics_results["jump_events_df"].to_parquet(jumps_output_path)
 
             # Log completion

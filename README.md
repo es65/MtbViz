@@ -81,8 +81,11 @@ process --input data/raw/ride.zip && viz --input data/processed/ride.parquet
 **The details:**
 
 ```bash
-# Process a single ride
+# Process a single ride from file
 process --input data/raw/ride.zip
+
+# Process a ride from database
+process --from-db --ride-id 12345678-1234-1234-1234-123456789abc
 
 # Process with custom output directory
 process --input ride.zip --output my_processed_data
@@ -98,14 +101,17 @@ process --input ride.zip --jump-threshold 2.0 --jump-min-consecutive 3
 ```
 
 **Common Options:**
-- `--input, -i`: Path to zip file or directory (required)
+- `--input, -i`: Path to zip file or directory (mutually exclusive with `--from-db`)
+- `--from-db`: Load ride data from PostgreSQL database instead of files
+- `--ride-id`: Ride UUID to load from database (required with `--from-db`)
 - `--output, -o`: Output directory (default: `data/processed`)
-- `--batch, -b`: Process all rides in input directory
+- `--batch, -b`: Process all rides in input directory (cannot be used with `--from-db`)
 - `--overwrite, -f`: Reprocess and overwrite existing output files
 - `--downsample-freq`: Resample frequency in Hz
 - `--verbose, -v`: Enable detailed logging
 - `--jump-threshold`: Jump detection threshold
 - `--jump-min-consecutive`: Minimum consecutive points for jump detection
+- `--port, -p`: Select customer port (default=8050)
 
 #### Python API
 
@@ -118,8 +124,11 @@ from mtb.src.pipeline import Pipeline, ProcessingConfig
 config = ProcessingConfig()
 pipeline = Pipeline(config)
 
-# Process a single ride
-result = pipeline.process_ride("data/raw/ride.zip")
+# Process a single ride from file
+result = pipeline.process_ride(input_path="data/raw/ride.zip")
+
+# Process a ride from database
+result = pipeline.process_ride(ride_id="12345678-1234-1234-1234-123456789abc")
 
 # Access results
 print(f"Duration: {result['summary_metrics']['duration_hr']:.2f} hours")
@@ -141,13 +150,37 @@ config = ProcessingConfig(
 )
 
 pipeline = Pipeline(config)
-result = pipeline.process_ride("data/raw/ride.zip")
+
+# Process from file
+result = pipeline.process_ride(input_path="data/raw/ride.zip")
+
+# Or process from database
+result = pipeline.process_ride(ride_id="12345678-1234-1234-1234-123456789abc")
+```
+
+**Database Configuration:**
+
+To use database loading functionality, ensure your database connection is configured:
+
+```python
+# Database URL is configured in mtb/db/session.py
+# Or set in .env file:
+# DATABASE_URL=postgresql://localhost/<db_name>
+
+# The database loading expects these tables:
+# - accel_device: accelerometer data
+# - gyro_device: gyroscope data
+# - orientation: orientation/quaternion data
+# - location: GPS location data
+
+# All tables use composite primary key (ride_id, ts)
+# where ts is timestamp(6) with time zone
 ```
 
 **Batch Processing:**
 
 ```python
-# Process multiple rides
+# Process multiple rides from files
 results = pipeline.process_multiple_rides("data/raw")
 
 # Analyze results
