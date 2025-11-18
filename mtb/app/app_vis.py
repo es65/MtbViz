@@ -10,6 +10,44 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+data_sets = {
+    # "accel, device": ["ax_device", "ay_device", "az_device", "ar"],
+    # "accel, earth": ["ax_e", "ay_e", "az_e", "ar"],
+    "viz vs mtb2": [
+        "az_uc_e",
+        "az_uc_e_filt",
+        "az_uc_e_az_uc_e_wavelet_db4_l3_t1.2_butter_5Hz",
+        "jump",
+        "jump_wavebutt_hyst",
+    ],
+    "accel, uncalib, device": [
+        "ax_uc_device",
+        "ay_uc_device",
+        "az_uc_device",
+        "ar",
+    ],
+    "accel, uncalib, earth": [
+        "ax_uc_e",
+        "ay_uc_e",
+        "az_uc_e",
+        "ar",
+        "ah_uc_e",
+    ],  # default
+    "az_uc_e, filt": [
+        "az_uc_e",
+        "az_uc_e_az_uc_e_wavelet_db4_l3_t1.2_butter_5Hz",
+        "ah_uc_e",
+        "jump_wavebutt_hyst",
+    ],  # default
+    "gyro, device": ["gx_device", "gy_device", "gz_device", "gr"],
+    "gyro, earth": ["gx_e", "gy_e", "gz_e", "gr"],
+    # "gravity, earth": ["gFx_e", "gFy_e", "gFz_e", "gFr"],
+    "orientation": ["qx", "qy", "qz", "qw", "yaw", "roll", "pitch"],
+    "speed": ["speed"],
+    "altitude": ["altitude"],
+}
+
+
 def resample_dataframe(data, x_range=None, max_points=2000):
     """
     Intelligently resample dataframe based on visible x-axis range.
@@ -73,39 +111,88 @@ def resample_dataframe(data, x_range=None, max_points=2000):
         return data, len(data)
 
 
-def create_plot(columns, data_to_plot=None, show_markers=False, view_total_points=None):
+def create_plot(
+    columns, rides_to_plot=None, show_markers=False, view_total_points_list=None
+):
     """
-    Create a plotly figure with the specified columns.
+    Create a plotly figure with the specified columns for multiple rides.
 
     Args:
         columns: List of column names to plot
-        data_to_plot: DataFrame to use for plotting (if None, uses global df)
+        rides_to_plot: List of ride dicts with 'name' and 'df' keys (if None, uses global rides)
         show_markers: Whether to show markers on the lines
-        view_total_points: Total points in current view before resampling (if None, uses len(df))
+        view_total_points_list: List of total points per ride before resampling (if None, uses len(df) for each)
     """
     fig = go.Figure()
 
-    # Use provided data or fall back to global df
-    plot_data = data_to_plot if data_to_plot is not None else df
+    # Use provided rides or fall back to global rides
+    plot_rides = rides_to_plot if rides_to_plot is not None else rides
 
-    # Filter to only columns that exist in the dataframe
-    available_columns = [col for col in columns if col in df.columns]
+    # Determine if we have multiple rides for legend formatting
+    multiple_rides = len(plot_rides) > 1
 
-    # Set mode based on marker preference
-    mode = "lines+markers" if show_markers else "lines"
-    marker_dict = dict(size=4) if show_markers else None
+    # Color palette for different rides
+    colors = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
 
-    for col in available_columns:
-        fig.add_trace(
-            go.Scatter(
-                x=plot_data.index,
-                y=plot_data[col],
-                mode=mode,
-                name=col,
-                hoverinfo="x+y+name",
-                marker=marker_dict,
+    total_shown_points = 0
+    total_view_points = 0
+    all_missing_cols = []
+
+    for ride_idx, ride in enumerate(plot_rides):
+        ride_name = ride["name"]
+        ride_df = ride["df"]
+
+        # Filter to only columns that exist in this ride's dataframe
+        available_columns = [col for col in columns if col in ride_df.columns]
+        missing_cols = [col for col in columns if col not in ride_df.columns]
+
+        if missing_cols:
+            all_missing_cols.extend([(ride_name, col) for col in missing_cols])
+
+        # Set mode based on marker preference
+        mode = "lines+markers" if show_markers else "lines"
+
+        # Get base color for this ride
+        base_color = colors[ride_idx % len(colors)]
+
+        for col in available_columns:
+            # Format legend name
+            if multiple_rides:
+                legend_name = f"{ride_name} - {col}"
+            else:
+                legend_name = col
+
+            fig.add_trace(
+                go.Scatter(
+                    x=ride_df.index,
+                    y=ride_df[col],
+                    mode=mode,
+                    name=legend_name,
+                    hoverinfo="x+y+name",
+                    marker=dict(size=4, color=base_color) if show_markers else None,
+                    line=dict(color=base_color),
+                )
             )
-        )
+
+        # Calculate points for this ride
+        if view_total_points_list is not None and ride_idx < len(
+            view_total_points_list
+        ):
+            total_view_points += view_total_points_list[ride_idx]
+        else:
+            total_view_points += len(ride_df)
+        total_shown_points += len(ride_df)
 
     fig.update_layout(
         hovermode="x unified",
@@ -117,11 +204,11 @@ def create_plot(columns, data_to_plot=None, show_markers=False, view_total_point
     annotation_y_pos = 1.05
 
     # Add a note if some columns were missing
-    if len(available_columns) < len(columns):
-        missing_cols = [col for col in columns if col not in df.columns]
+    if all_missing_cols:
+        unique_missing = len(set(all_missing_cols))
         annotations.append(
             dict(
-                text=f"Note: {len(missing_cols)} column(s) not available in data",
+                text=f"Note: {unique_missing} column(s) not available in some rides",
                 xref="paper",
                 yref="paper",
                 x=0.5,
@@ -132,16 +219,13 @@ def create_plot(columns, data_to_plot=None, show_markers=False, view_total_point
         )
         annotation_y_pos += 0.05
 
-    # Add resampling info even if all data shown:
-    total_points_in_view = (
-        view_total_points if view_total_points is not None else len(df)
+    # Add resampling info
+    sampling_ratio = (
+        total_shown_points / total_view_points * 100 if total_view_points > 0 else 100
     )
-    shown_points = len(plot_data)
-
-    sampling_ratio = shown_points / total_points_in_view * 100
     annotations.append(
         dict(
-            text=f"Showing {shown_points:,} of {total_points_in_view:,} points in view ({sampling_ratio:.1f}%) - Zoom in for more detail",
+            text=f"Showing {total_shown_points:,} of {total_view_points:,} points in view ({sampling_ratio:.1f}%) - Zoom in for more detail",
             xref="paper",
             yref="paper",
             x=0.02,
@@ -238,8 +322,17 @@ parser.add_argument(
     "--input",
     "-i",
     type=str,
-    default="./data/processed/example_joaquinmiller_241117.parquet",
-    help="Path to the input .parquet file (default: ./data/processed/example_joaquinmiller_241117.parquet)",
+    nargs="+",
+    default=["./data/processed/example_joaquinmiller_241117.parquet"],
+    help="Path(s) to the input .parquet file(s) (default: ./data/processed/example_joaquinmiller_241117.parquet)",
+)
+parser.add_argument(
+    "--names",
+    "-n",
+    type=str,
+    nargs="*",
+    default=None,
+    help="Optional short names for the input files (must match number of inputs)",
 )
 parser.add_argument(
     "--port",
@@ -250,27 +343,67 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Extract ride name from input file path
-input_path = Path(args.input)
-ride_name = input_path.stem  # Gets filename without extension
+# Validate names argument if provided
+if args.names is not None and len(args.names) != len(args.input):
+    raise ValueError(
+        f"Number of names ({len(args.names)}) must match number of inputs ({len(args.input)})"
+    )
 
-df = pd.read_parquet(args.input)
-df = df.dropna(subset=["latitude", "longitude"])
+# Load all rides with their names
+rides = []
+for idx, input_file in enumerate(args.input):
+    input_path = Path(input_file)
 
-# Load summary metrics
-summary_metrics = load_summary_metrics(args.input)
+    # Determine the name for this ride
+    if args.names is not None:
+        ride_name = args.names[idx]
+    else:
+        # Use last 10 characters of filename (without extension)
+        ride_name = (
+            input_path.stem[-10:] if len(input_path.stem) > 10 else input_path.stem
+        )
 
-# Edit line below to set index as elapsed_seconds (uncomment) or keep as datetime (comment out):
-df.set_index("elapsed_seconds", drop=True, inplace=True)
+    # Load dataframe
+    df = pd.read_parquet(input_file)
+    df = df.dropna(subset=["latitude", "longitude"])
+
+    # Set index as elapsed_seconds
+    df.set_index("elapsed_seconds", drop=True, inplace=True)
+
+    # Load summary metrics
+    metrics = load_summary_metrics(input_file)
+
+    # Store ride info
+    rides.append(
+        {
+            "name": ride_name,
+            "df": df,
+            "metrics": metrics,
+            "input_path": input_path,
+        }
+    )
+
+# For backward compatibility, also keep a reference to the first dataframe as 'df'
+df = rides[0]["df"]
 
 if isinstance(df.index, pd.DatetimeIndex):
     timezone = df.index.tz.zone
 
-route_positions = list(zip(df["latitude"], df["longitude"]))
+# Calculate route positions and bounds for all rides
+all_route_positions = []
+all_lats = []
+all_lons = []
 
-# Lat lon bounds with padding for initial map view
-lat_min, lat_max = df["latitude"].min(), df["latitude"].max()
-lon_min, lon_max = df["longitude"].min(), df["longitude"].max()
+for ride in rides:
+    ride_df = ride["df"]
+    positions = list(zip(ride_df["latitude"], ride_df["longitude"]))
+    all_route_positions.append(positions)
+    all_lats.extend(ride_df["latitude"].tolist())
+    all_lons.extend(ride_df["longitude"].tolist())
+
+# Lat lon bounds with padding for initial map view (encompassing all rides)
+lat_min, lat_max = min(all_lats), max(all_lats)
+lon_min, lon_max = min(all_lons), max(all_lons)
 
 lat_padding = 0.05 * (lat_max - lat_min)
 lon_padding = 0.05 * (lon_max - lon_min)
@@ -280,35 +413,12 @@ bounds = [
     [lat_max + lat_padding, lon_max + lon_padding],  # Northeast corner
 ]
 
-data_sets = {
-    # "accel, device": ["ax_device", "ay_device", "az_device", "ar"],
-    # "accel, earth": ["ax_e", "ay_e", "az_e", "ar"],
-    "accel, uncalib, device": [
-        "ax_uc_device",
-        "ay_uc_device",
-        "az_uc_device",
-        "ar",
-    ],
-    "accel, uncalib, earth": [
-        "ax_uc_e",
-        "ay_uc_e",
-        "az_uc_e",
-        "ar",
-        "ah_uc_e",
-    ],  # default
-    "gyro, device": ["gx_device", "gy_device", "gz_device", "gr"],
-    "gyro, earth": ["gx_e", "gy_e", "gz_e", "gr"],
-    # "gravity, earth": ["gFx_e", "gFy_e", "gFz_e", "gFr"],
-    "orientation": ["qx", "qy", "qz", "yaw", "roll", "pitch"],
-    "speed": ["speed"],
-    "altitude": ["altitude"],
-}
 
-# Filter datasets to only include those with at least one available column
+# Filter datasets to only include those with at least one available column in any ride
 available_data_sets = {
     key: cols
     for key, cols in data_sets.items()
-    if any(col in df.columns for col in cols)
+    if any(col in ride["df"].columns for ride in rides for col in cols)
 }
 
 # Select default dataset (prefer the original default if available, otherwise pick the first available)
@@ -330,12 +440,14 @@ app.layout = html.Div(
     [
         # html.H1("Interactive Plotly Graph and Leaflet Map"),
         dcc.Graph(
-            id="plotly-graph", figure=create_plot(available_data_sets[default_dataset])
+            id="plotly-graph",
+            figure=create_plot(available_data_sets[default_dataset]),
+            style={"height": "600px"},
         ),
-        # Ride title at top left
+        # Ride title at top left (comma-separated list for multiple rides)
         html.Div(
             html.H2(
-                ride_name,
+                ", ".join([ride["name"] for ride in rides]),
                 style={
                     "margin": "0",
                     "fontSize": "20px",
@@ -367,7 +479,7 @@ app.layout = html.Div(
             style={
                 "position": "absolute",
                 "top": "10px",
-                "right": "700px",
+                "right": "930px",
                 "zIndex": "1000",
             },
         ),
@@ -389,7 +501,29 @@ app.layout = html.Div(
             style={
                 "position": "absolute",
                 "top": "10px",
-                "right": "470px",
+                "right": "700px",
+                "zIndex": "1000",
+            },
+        ),
+        html.Div(
+            [
+                html.Label("Graph Height:"),
+                dcc.Dropdown(
+                    id="graph-height-selector",
+                    options=[
+                        {"label": "500px", "value": 500},
+                        {"label": "600px", "value": 600},
+                        {"label": "700px", "value": 700},
+                    ],
+                    value=600,  # Default to 600px
+                    clearable=False,
+                    style={"width": "120px"},
+                ),
+            ],
+            style={
+                "position": "absolute",
+                "top": "10px",
+                "right": "550px",
                 "zIndex": "1000",
             },
         ),
@@ -427,40 +561,46 @@ app.layout = html.Div(
                 "zIndex": "1000",
             },
         ),
-        dl.Map(
-            id="map",
-            bounds=bounds,
+        html.Div(
+            id="map-container",
             style={"width": "95%", "height": "400px", "margin": "0 auto"},
             children=[
-                # dl.TileLayer(),  # Base map
-                dl.TileLayer(
-                    id="base-layer",
-                    url=f"https://mt1.google.com/vt/lyrs=p&x={{x}}&y={{y}}&z={{z}}&apikey={GOOGLE_MAPS_API_KEY}",
-                    # satellite: lyrs=s or y; standard roadmap: lyrs=m; terrain: lyrs=p; hybrid: lyrs=hybrid or
-                    attribution="Google Maps",
-                    maxZoom=22,
+                dl.Map(
+                    id="map",
+                    bounds=bounds,
+                    style={"width": "100%", "height": "100%"},
+                    children=[
+                        # dl.TileLayer(),  # Base map
+                        dl.TileLayer(
+                            id="base-layer",
+                            url=f"https://mt1.google.com/vt/lyrs=p&x={{x}}&y={{y}}&z={{z}}&apikey={GOOGLE_MAPS_API_KEY}",
+                            # satellite: lyrs=s or y; standard roadmap: lyrs=m; terrain: lyrs=p; hybrid: lyrs=hybrid or
+                            attribution="Google Maps",
+                            maxZoom=22,
+                        ),
+                        # Create a Polyline for each ride with different colors
+                        *[
+                            dl.Polyline(
+                                id=f"route-line-{idx}",
+                                positions=all_route_positions[idx],
+                                color=["blue", "red", "green", "purple", "orange"][
+                                    idx % 5
+                                ],
+                            )
+                            for idx in range(len(rides))
+                        ],
+                        dl.Marker(
+                            id="marker",
+                            position=[df["latitude"].iloc[0], df["longitude"].iloc[0]],
+                        ),  # Marker to update
+                        dl.ScaleControl(position="bottomleft"),
+                    ],
                 ),
-                dl.Polyline(
-                    id="route-line", positions=route_positions, color="blue"
-                ),  # Route
-                dl.Marker(
-                    id="marker",
-                    position=[df["latitude"].iloc[0], df["longitude"].iloc[0]],
-                ),  # Marker to update
-                dl.ScaleControl(position="bottomleft"),
             ],
         ),
         # Summary Metrics Section
         html.Div(
             [
-                html.H2(
-                    "Summary Metrics",
-                    style={
-                        "textAlign": "center",
-                        "marginTop": "30px",
-                        "marginBottom": "20px",
-                    },
-                ),
                 html.Div(
                     id="summary-metrics-content",
                     style={"maxWidth": "800px", "margin": "0 auto", "padding": "20px"},
@@ -472,6 +612,12 @@ app.layout = html.Div(
 )
 
 
+# Callback to update graph height
+@app.callback(Output("plotly-graph", "style"), Input("graph-height-selector", "value"))
+def update_graph_height(height):
+    return {"height": f"{height}px"}
+
+
 # Callback to update the graph based on dataset selection, marker toggle, and zoom level
 @app.callback(
     Output("plotly-graph", "figure"),
@@ -481,17 +627,28 @@ app.layout = html.Div(
 )
 def update_graph(selected_dataset, marker_toggle, relayout_data):
     """
-    Update graph with resampling based on zoom level.
+    Update graph with resampling based on zoom level for all rides.
 
     When zoomed out, shows fewer points for performance.
     When zoomed in, shows more detail up to full resolution.
     """
+    from dash import no_update
+
     columns = available_data_sets[selected_dataset]
     show_markers = "show" in marker_toggle
 
     # Extract x-axis range from relayout data
     x_range = None
     if relayout_data is not None:
+        # Check if this is only a y-axis change (or other layout change that doesn't affect x-axis)
+        # If so, don't recalculate to preserve current x-axis zoom and resampling
+        has_xaxis_change = any(key.startswith("xaxis") for key in relayout_data.keys())
+        has_autosize = "autosize" in relayout_data
+
+        # If it's only y-axis or other changes (not x-axis), skip update
+        if not has_xaxis_change and not has_autosize:
+            return no_update
+
         # Handle different relayout event types
         if "xaxis.range[0]" in relayout_data and "xaxis.range[1]" in relayout_data:
             x_range = (relayout_data["xaxis.range[0]"], relayout_data["xaxis.range[1]"])
@@ -502,6 +659,7 @@ def update_graph(selected_dataset, marker_toggle, relayout_data):
     # When markers are enabled, use fewer points for better performance
     # When zoomed in significantly, allow more points
     if x_range is not None:
+        # Calculate visible ratio based on first ride (they should be similar)
         visible_ratio = (x_range[1] - x_range[0]) / (df.index.max() - df.index.min())
         # More zoom = more points allowed
         if visible_ratio < 0.01:  # Very zoomed in (< 1% of data visible)
@@ -512,22 +670,36 @@ def update_graph(selected_dataset, marker_toggle, relayout_data):
             max_points = 2000
     else:
         # Default: show full view with moderate point count
-        max_points = 1500
+        max_points = 2000
 
     # Further reduce points if markers are enabled
     if show_markers:
         max_points = min(max_points, 2000)
 
-    # Resample the dataframe
-    resampled_df, view_total = resample_dataframe(
-        df, x_range=x_range, max_points=max_points
-    )
+    # Resample each ride's dataframe
+    resampled_rides = []
+    view_totals = []
+
+    for ride in rides:
+        ride_df = ride["df"]
+        resampled_df, view_total = resample_dataframe(
+            ride_df, x_range=x_range, max_points=max_points
+        )
+
+        resampled_rides.append(
+            {
+                "name": ride["name"],
+                "df": resampled_df,
+                "metrics": ride["metrics"],
+            }
+        )
+        view_totals.append(view_total)
 
     return create_plot(
         columns,
-        data_to_plot=resampled_df,
+        rides_to_plot=resampled_rides,
         show_markers=show_markers,
-        view_total_points=view_total,
+        view_total_points_list=view_totals,
     )
 
 
@@ -538,15 +710,39 @@ def update_marker(hover_data):
         # Default location if no hover data
         lat, lon = df["latitude"].iloc[0], df["longitude"].iloc[0]
     else:
-        # Get the datetime of the hovered point
-        hover_datetime = hover_data["points"][0]["x"]
-        if isinstance(df.index, pd.DatetimeIndex):
+        # Get the hovered point information
+        point = hover_data["points"][0]
+        hover_datetime = point["x"]
+        trace_name = point.get("data", {}).get("name", "")
+
+        # Determine which ride this belongs to
+        target_ride = None
+        if len(rides) > 1:
+            # For multiple rides, trace name is "name - col_name"
+            # Extract the ride name
+            if " - " in trace_name:
+                ride_name = trace_name.split(" - ")[0]
+                target_ride = next((r for r in rides if r["name"] == ride_name), None)
+
+        # If we couldn't determine the ride or only one ride, use first ride
+        if target_ride is None:
+            target_ride = rides[0]
+
+        target_df = target_ride["df"]
+
+        # Handle datetime conversion if needed
+        if isinstance(target_df.index, pd.DatetimeIndex):
             hover_datetime = pd.to_datetime(hover_datetime).tz_localize(timezone)
             print(hover_datetime, "\n")
 
         # Match the datetime in the DataFrame
-        row = df.loc[hover_datetime]
-        lat, lon = row["latitude"], row["longitude"]
+        try:
+            row = target_df.loc[hover_datetime]
+            lat, lon = row["latitude"], row["longitude"]
+        except KeyError:
+            # If exact match not found, use closest
+            idx = target_df.index.get_indexer([hover_datetime], method="nearest")[0]
+            lat, lon = target_df["latitude"].iloc[idx], target_df["longitude"].iloc[idx]
 
     # Return the updated marker position
     return [lat, lon]
@@ -559,13 +755,17 @@ def update_map_layer(selected_layer):
     return f"https://mt1.google.com/vt/lyrs={selected_layer}&x={{x}}&y={{y}}&z={{z}}&apikey={GOOGLE_MAPS_API_KEY}"
 
 
-# Callback to toggle the visibility of the route line
-@app.callback(Output("route-line", "positions"), Input("route-toggle", "value"))
-def toggle_route_line(toggle_value):
-    # Return the Polyline only if "show" is in the checklist's value
-    if "show" in toggle_value:
-        return route_positions
-    return []
+# Callbacks to toggle the visibility of all route lines
+for idx in range(len(rides)):
+
+    @app.callback(
+        Output(f"route-line-{idx}", "positions"), Input("route-toggle", "value")
+    )
+    def toggle_route_line(toggle_value, route_idx=idx):
+        # Return the Polyline only if "show" is in the checklist's value
+        if "show" in toggle_value:
+            return all_route_positions[route_idx]
+        return []
 
 
 # Callback to populate summary metrics
@@ -573,7 +773,10 @@ def toggle_route_line(toggle_value):
     Output("summary-metrics-content", "children"), Input("dataset-selector", "value")
 )
 def update_summary_metrics(selected_dataset):
-    if summary_metrics is None:
+    # Check if any rides have metrics
+    has_any_metrics = any(ride["metrics"] is not None for ride in rides)
+
+    if not has_any_metrics:
         return html.Div(
             "No summary metrics available.",
             style={
@@ -584,35 +787,83 @@ def update_summary_metrics(selected_dataset):
             },
         )
 
-    table_rows = []
-    for metric_name, metric_value in summary_metrics.items():
-        table_rows.append(
-            html.Tr(
-                [
-                    html.Td(
-                        metric_name,
-                        style={
-                            "padding": "12px 20px",
-                            "fontWeight": "bold",
-                            "backgroundColor": "#f8f9fa",
-                            "borderBottom": "1px solid #dee2e6",
-                            "textAlign": "left",
-                        },
-                    ),
-                    html.Td(
-                        metric_value,
-                        style={
-                            "padding": "12px 20px",
-                            "backgroundColor": "white",
-                            "borderBottom": "1px solid #dee2e6",
-                            "textAlign": "right",
-                            "fontFamily": "monospace",
-                            "fontSize": "14px",
-                        },
-                    ),
-                ]
+    # Collect all unique metric names across all rides
+    all_metric_names = set()
+    for ride in rides:
+        if ride["metrics"] is not None:
+            all_metric_names.update(ride["metrics"].keys())
+
+    # Sort metric names for consistent ordering
+    all_metric_names = sorted(all_metric_names)
+
+    # Create header row with ride names
+    header_cells = [
+        html.Th(
+            "Metric",
+            style={
+                "padding": "12px 20px",
+                "backgroundColor": "#2c3e50",
+                "color": "white",
+                "borderBottom": "2px solid #dee2e6",
+                "textAlign": "left",
+                "fontWeight": "bold",
+            },
+        )
+    ]
+
+    for ride in rides:
+        header_cells.append(
+            html.Th(
+                ride["name"],
+                style={
+                    "padding": "12px 20px",
+                    "backgroundColor": "#2c3e50",
+                    "color": "white",
+                    "borderBottom": "2px solid #dee2e6",
+                    "textAlign": "right",
+                    "fontWeight": "bold",
+                },
             )
         )
+
+    # Create data rows
+    table_rows = [html.Tr(header_cells)]
+
+    for metric_name in all_metric_names:
+        row_cells = [
+            html.Td(
+                metric_name,
+                style={
+                    "padding": "12px 20px",
+                    "fontWeight": "bold",
+                    "backgroundColor": "#f8f9fa",
+                    "borderBottom": "1px solid #dee2e6",
+                    "textAlign": "left",
+                },
+            )
+        ]
+
+        for ride in rides:
+            if ride["metrics"] is not None and metric_name in ride["metrics"]:
+                value = ride["metrics"][metric_name]
+            else:
+                value = "-"
+
+            row_cells.append(
+                html.Td(
+                    value,
+                    style={
+                        "padding": "12px 20px",
+                        "backgroundColor": "white",
+                        "borderBottom": "1px solid #dee2e6",
+                        "textAlign": "right",
+                        "fontFamily": "monospace",
+                        "fontSize": "14px",
+                    },
+                )
+            )
+
+        table_rows.append(html.Tr(row_cells))
 
     return html.Table(
         table_rows,
