@@ -8,6 +8,8 @@ import argparse
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+import numpy as np
+from sqlalchemy import text
 
 
 data_sets = {
@@ -314,6 +316,15 @@ def load_summary_metrics(input_file_path):
 load_dotenv()  # Load variables from .env file
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
+# Import database session for jump queries
+try:
+    from mtb.db.session import SessionLocal
+
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    print("Warning: Database not available. --jumps option will be disabled.")
+
 # Parse command line arguments
 parser = argparse.ArgumentParser(
     description="MtbViz - Interactive mountain biking data visualization"
@@ -340,6 +351,12 @@ parser.add_argument(
     type=int,
     default=8050,
     help="Port to run the Dash app on (default: 8050)",
+)
+parser.add_argument(
+    "--jumps",
+    "-j",
+    action="store_true",
+    help="Show jump takeoff and landing locations from database (requires database connection)",
 )
 args = parser.parse_args()
 
@@ -432,6 +449,159 @@ if not available_data_sets:
     print("Warning: No data sets have available columns in the dataframe")
     available_data_sets = {"speed": ["speed"]}  # Fallback
     default_dataset = "speed"
+
+
+def create_ellipse_points(center_lat, center_lng, lat_std, lng_std, num_points=50):
+    """
+    Create points for an ellipse shape.
+
+    Args:
+        center_lat: Center latitude
+        center_lng: Center longitude
+        lat_std: Standard deviation in latitude (determines height)
+        lng_std: Standard deviation in longitude (determines width)
+        num_points: Number of points to create for the ellipse
+
+    Returns:
+        List of [lat, lng] coordinates forming an ellipse
+    """
+    # Semi-axes (radius in each direction)
+    a = lat_std  # Height radius
+    b = lng_std  # Width radius
+
+    # Generate points around the ellipse
+    angles = np.linspace(0, 2 * np.pi, num_points)
+    points = []
+
+    for angle in angles:
+        lat = center_lat + a * np.sin(angle)
+        lng = center_lng + b * np.cos(angle)
+        points.append([lat, lng])
+
+    # Close the ellipse by adding the first point at the end
+    points.append(points[0])
+
+    return points
+
+
+def query_jumps_global(lat_min, lat_max, lon_min, lon_max):
+    """
+    Query jumps_global table for jumps within the given bounds.
+
+    Args:
+        lat_min, lat_max: Latitude bounds
+        lon_min, lon_max: Longitude bounds
+
+    Returns:
+        List of jump dictionaries with takeoff and landing statistics
+    """
+    if not DB_AVAILABLE:
+        return []
+
+    try:
+        db = SessionLocal()
+
+        # Query for jumps where either takeoff or landing is within bounds
+        query = text(
+            """
+            SELECT
+                lat_takeoff_avg,
+                lng_takeoff_avg,
+                lat_takeoff_std,
+                lng_takeoff_std,
+                lat_landing_avg,
+                lng_landing_avg,
+                lat_landing_std,
+                lng_landing_std
+            FROM jumps_global
+            WHERE (
+                (lat_takeoff_avg BETWEEN :lat_min AND :lat_max
+                 AND lng_takeoff_avg BETWEEN :lon_min AND :lon_max)
+                OR
+                (lat_landing_avg BETWEEN :lat_min AND :lat_max
+                 AND lng_landing_avg BETWEEN :lon_min AND :lon_max)
+            )
+        """
+        )
+
+        result = db.execute(
+            query,
+            {
+                "lat_min": lat_min,
+                "lat_max": lat_max,
+                "lon_min": lon_min,
+                "lon_max": lon_max,
+            },
+        )
+
+        jumps = []
+        for row in result:
+            jumps.append(
+                {
+                    "lat_takeoff_avg": row.lat_takeoff_avg,
+                    "lng_takeoff_avg": row.lng_takeoff_avg,
+                    "lat_takeoff_std": row.lat_takeoff_std,
+                    "lng_takeoff_std": row.lng_takeoff_std,
+                    "lat_landing_avg": row.lat_landing_avg,
+                    "lng_landing_avg": row.lng_landing_avg,
+                    "lat_landing_std": row.lat_landing_std,
+                    "lng_landing_std": row.lng_landing_std,
+                }
+            )
+
+        db.close()
+        return jumps
+
+    except Exception as e:
+        print(f"Error querying jumps_global: {e}")
+        return []
+
+
+# Query jumps if --jumps flag is enabled
+jump_overlays = []
+if args.jumps and DB_AVAILABLE:
+    jumps_data = query_jumps_global(lat_min, lat_max, lon_min, lon_max)
+    print(f"Found {len(jumps_data)} jumps in map bounds")
+
+    # Create takeoff and landing overlays
+    for idx, jump in enumerate(jumps_data):
+        # Takeoff ellipse (light blue with transparency)
+        takeoff_points = create_ellipse_points(
+            jump["lat_takeoff_avg"],
+            jump["lng_takeoff_avg"],
+            jump["lat_takeoff_std"],
+            jump["lng_takeoff_std"],
+        )
+        jump_overlays.append(
+            dl.Polygon(
+                id=f"jump-takeoff-{idx}",
+                positions=takeoff_points,
+                color="#4DA6FF",  # Light blue
+                fillColor="#4DA6FF",
+                fillOpacity=0.3,
+                weight=2,
+            )
+        )
+
+        # Landing ellipse (light red with transparency)
+        landing_points = create_ellipse_points(
+            jump["lat_landing_avg"],
+            jump["lng_landing_avg"],
+            jump["lat_landing_std"],
+            jump["lng_landing_std"],
+        )
+        jump_overlays.append(
+            dl.Polygon(
+                id=f"jump-landing-{idx}",
+                positions=landing_points,
+                color="#FF6B6B",  # Light red
+                fillColor="#FF6B6B",
+                fillOpacity=0.3,
+                weight=2,
+            )
+        )
+elif args.jumps and not DB_AVAILABLE:
+    print("Warning: --jumps flag enabled but database is not available")
 
 app = Dash(__name__)
 
@@ -529,24 +699,26 @@ app.layout = html.Div(
         ),
         html.Div(
             [
-                html.Label("Show Route:"),
+                html.Label("Show Route:", style={"marginRight": "5px"}),
                 dcc.Checklist(
                     id="route-toggle",
                     options=[{"label": "", "value": "show"}],
                     value=["show"],  # Default to showing the route
-                    style={"display": "inline-block"},  # , "margin-left": "10px"}
+                    style={"display": "inline-block"},
                 ),
             ],
             style={
                 "position": "absolute",
                 "top": "10px",
-                "right": "280px",
+                "right": "420px",
                 "zIndex": "1000",
+                "display": "flex",
+                "alignItems": "center",
             },
         ),
         html.Div(
             [
-                html.Label("Show Markers:"),
+                html.Label("Show Markers:", style={"marginRight": "5px"}),
                 dcc.Checklist(
                     id="marker-toggle",
                     options=[{"label": "", "value": "show"}],
@@ -557,10 +729,39 @@ app.layout = html.Div(
             style={
                 "position": "absolute",
                 "top": "10px",
-                "right": "80px",
+                "right": "300px" if args.jumps else "180px",
                 "zIndex": "1000",
+                "display": "flex",
+                "alignItems": "center",
             },
         ),
+    ]
+    + (
+        [
+            html.Div(
+                [
+                    html.Label("Show Jumps:", style={"marginRight": "5px"}),
+                    dcc.Checklist(
+                        id="jumps-toggle",
+                        options=[{"label": "", "value": "show"}],
+                        value=["show"],  # Default to showing jumps if enabled
+                        style={"display": "inline-block"},
+                    ),
+                ],
+                style={
+                    "position": "absolute",
+                    "top": "10px",
+                    "right": "180px",
+                    "zIndex": "1000",
+                    "display": "flex",
+                    "alignItems": "center",
+                },
+            ),
+        ]
+        if args.jumps
+        else []
+    )
+    + [
         html.Div(
             id="map-container",
             style={"width": "95%", "height": "400px", "margin": "0 auto"},
@@ -589,6 +790,8 @@ app.layout = html.Div(
                             )
                             for idx in range(len(rides))
                         ],
+                        # Add jump overlays if enabled
+                        *jump_overlays,
                         dl.Marker(
                             id="marker",
                             position=[df["latitude"].iloc[0], df["longitude"].iloc[0]],
@@ -766,6 +969,48 @@ for idx in range(len(rides)):
         if "show" in toggle_value:
             return all_route_positions[route_idx]
         return []
+
+
+# Callbacks to toggle the visibility of jump overlays
+if args.jumps and jump_overlays:
+    # Store original positions for each jump overlay
+    jump_overlay_positions = {}
+
+    # Query jumps again to get the positions (we need to preserve them)
+    jumps_data = query_jumps_global(lat_min, lat_max, lon_min, lon_max)
+
+    for idx, jump in enumerate(jumps_data):
+        # Store takeoff positions
+        takeoff_key = f"jump-takeoff-{idx}"
+        jump_overlay_positions[takeoff_key] = create_ellipse_points(
+            jump["lat_takeoff_avg"],
+            jump["lng_takeoff_avg"],
+            jump["lat_takeoff_std"],
+            jump["lng_takeoff_std"],
+        )
+
+        # Store landing positions
+        landing_key = f"jump-landing-{idx}"
+        jump_overlay_positions[landing_key] = create_ellipse_points(
+            jump["lat_landing_avg"],
+            jump["lng_landing_avg"],
+            jump["lat_landing_std"],
+            jump["lng_landing_std"],
+        )
+
+        # Create callback for takeoff overlay
+        @app.callback(Output(takeoff_key, "positions"), Input("jumps-toggle", "value"))
+        def toggle_jump_takeoff(toggle_value, overlay_id=takeoff_key):
+            if "show" in toggle_value:
+                return jump_overlay_positions[overlay_id]
+            return []
+
+        # Create callback for landing overlay
+        @app.callback(Output(landing_key, "positions"), Input("jumps-toggle", "value"))
+        def toggle_jump_landing(toggle_value, overlay_id=landing_key):
+            if "show" in toggle_value:
+                return jump_overlay_positions[overlay_id]
+            return []
 
 
 # Callback to populate summary metrics

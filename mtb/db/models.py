@@ -5,8 +5,10 @@ Centralized model imports to prevent circular dependencies and multiple table de
 # Export all models
 __all__ = [
     "User",
+    "Bike",
     "Ride",
     "Jump",
+    "JumpGlobal",
     "RideMetrics",
     "Location",
     "Compass",
@@ -38,7 +40,7 @@ from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
 from datetime import datetime, timezone
 import uuid
 
-from mtb.db.session import Base
+from .session import Base
 
 
 def utc_now():
@@ -57,8 +59,42 @@ class User(Base):
     created_at = Column(TIMESTAMP(timezone=True), default=utc_now)
     is_active = Column(Boolean, default=True)
 
-    # Relationship: One user can have many rides
+    # Relationships
     rides = relationship("Ride", back_populates="user")
+    bikes = relationship("Bike", back_populates="user", cascade="all, delete-orphan")
+
+
+class Bike(Base):
+    """Model for user's bikes/bicycles."""
+
+    __tablename__ = "bikes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name = Column(String(100), nullable=False)  # nickname/display name
+    brand = Column(String(100))  # manufacturer (e.g., "Trek", "Specialized")
+    model = Column(String(100))  # specific model
+    bike_type = Column(String(50))  # mountain, road, gravel, hybrid, etc.
+    wheel_size = Column(String(20))  # e.g., "29", "27.5", "26", "700c"
+    year = Column(Integer)  # model year
+    weight = Column(Double)  # bike weight in kg
+    notes = Column(String(500))  # user notes/custom details
+    is_active = Column(Boolean, default=True)  # soft delete flag
+    is_default = Column(Boolean, default=False)  # default bike for rides
+    created_at = Column(TIMESTAMP(timezone=True), default=utc_now)
+    updated_at = Column(TIMESTAMP(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Relationships
+    user = relationship("User", back_populates="bikes")
+    rides = relationship("Ride", back_populates="bike")
+
+    # Indexes for performance
+    __table_args__ = (
+        Index("idx_bikes_user_id", "user_id"),
+        Index("idx_bikes_user_active", "user_id", "is_active"),
+    )
 
 
 class Ride(Base):
@@ -67,6 +103,9 @@ class Ride(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    )
+    bike_id = Column(
+        UUID(as_uuid=True), ForeignKey("bikes.id", ondelete="SET NULL"), nullable=True
     )
     start_time = Column(TIMESTAMP(timezone=True))
     end_time = Column(TIMESTAMP(timezone=True))
@@ -85,6 +124,7 @@ class Ride(Base):
 
     # Relationships
     user = relationship("User", back_populates="rides")
+    bike = relationship("Bike", back_populates="rides")
     jumps = relationship("Jump", back_populates="ride", cascade="all, delete-orphan")
     metrics = relationship(
         "RideMetrics",
@@ -124,13 +164,89 @@ class Jump(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ride_id = Column(UUID(as_uuid=True), ForeignKey("rides.id", ondelete="CASCADE"))
-    location = Column(JSON)  # {lat: float, lng: float}
+    jump_global_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("jumps_global.id", ondelete="SET NULL"),
+        nullable=True,
+    )  # Link to global jump entity (NULL if classified as noise)
+    ts = Column(TIMESTAMP(timezone=True, precision=6))  # timestamp of jump event
+    location = Column(
+        JSON
+    )  # {lat: float, lng: float}; deprecated but keep until manual migration
     distance = Column(Double)
     airtime = Column(Double)
-    count = Column(Integer)
+    lat_takeoff = Column(Double)
+    lng_takeoff = Column(Double)
+    lat_landing = Column(Double)
+    lng_landing = Column(Double)
+    boost = Column(Double)  # integrated pre-jump vertical acceleration (m/s)
+    impact = Column(Double)  # integrated post-landing vertical acceleration (m/s)
+    speed_mph = Column(Double)  # speed during jump
+    created_at = Column(TIMESTAMP(timezone=True), default=utc_now)
+    updated_at = Column(TIMESTAMP(timezone=True), default=utc_now, onupdate=utc_now)
 
-    # Relationship: Each jump belongs to one ride
+    # Relationships
     ride = relationship("Ride", back_populates="jumps")
+    jump_global = relationship("JumpGlobal", back_populates="jumps")
+
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index("idx_jumps_ride_ts", "ride_id", "ts"),
+        # Spatial indexes for clustering queries
+        Index("idx_jumps_takeoff_coords", "lat_takeoff", "lng_takeoff"),
+        Index("idx_jumps_landing_coords", "lat_landing", "lng_landing"),
+    )
+
+
+class JumpGlobal(Base):
+    """Global jump entities derived from clustering individual jump events."""
+
+    __tablename__ = "jumps_global"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(TIMESTAMP(timezone=True), default=utc_now)
+    updated_at = Column(TIMESTAMP(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Takeoff cluster statistics
+    lat_takeoff_avg = Column(Double, nullable=False)
+    lng_takeoff_avg = Column(Double, nullable=False)
+    lat_takeoff_std = Column(Double, nullable=False)
+    lng_takeoff_std = Column(Double, nullable=False)
+
+    # Landing cluster statistics
+    lat_landing_avg = Column(Double, nullable=False)
+    lng_landing_avg = Column(Double, nullable=False)
+    lat_landing_std = Column(Double, nullable=False)
+    lng_landing_std = Column(Double, nullable=False)
+
+    # Jump metrics: averages
+    distance_avg = Column(Double)
+    airtime_avg = Column(Double)
+    boost_avg = Column(Double)
+    impact_avg = Column(Double)
+
+    # Jump metrics: standard deviations
+    distance_std = Column(Double)
+    airtime_std = Column(Double)
+    boost_std = Column(Double)
+    impact_std = Column(Double)
+
+    # Metadata
+    jump_count = Column(Integer, nullable=False)  # number of jumps in this cluster
+
+    # Relationship: back-reference to individual jumps in this cluster
+    jumps = relationship("Jump", back_populates="jump_global")
+
+    # Indexes for spatial queries
+    __table_args__ = (
+        Index("idx_jumps_global_takeoff_lat", "lat_takeoff_avg"),
+        Index("idx_jumps_global_takeoff_lng", "lng_takeoff_avg"),
+        Index("idx_jumps_global_landing_lat", "lat_landing_avg"),
+        Index("idx_jumps_global_landing_lng", "lng_landing_avg"),
+        # Composite indexes for bounding box queries
+        Index("idx_jumps_global_takeoff_coords", "lat_takeoff_avg", "lng_takeoff_avg"),
+        Index("idx_jumps_global_landing_coords", "lat_landing_avg", "lng_landing_avg"),
+    )
 
 
 class RideMetrics(Base):
