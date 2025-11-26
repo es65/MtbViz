@@ -936,7 +936,6 @@ def update_marker(hover_data):
         # Handle datetime conversion if needed
         if isinstance(target_df.index, pd.DatetimeIndex):
             hover_datetime = pd.to_datetime(hover_datetime).tz_localize(timezone)
-            print(hover_datetime, "\n")
 
         # Match the datetime in the DataFrame
         try:
@@ -1017,7 +1016,7 @@ if args.jumps and jump_overlays:
 @app.callback(
     Output("summary-metrics-content", "children"), Input("dataset-selector", "value")
 )
-def update_summary_metrics(selected_dataset):
+def update_summary_metrics(_selected_dataset):
     # Check if any rides have metrics
     has_any_metrics = any(ride["metrics"] is not None for ride in rides)
 

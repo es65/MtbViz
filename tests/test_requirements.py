@@ -26,14 +26,14 @@ def test_imports():
         import yaml
         import dotenv
 
-        print("\n🎉 All packages imported successfully!")
+        print("\ All packages imported successfully!")
         return True
 
     except ImportError as e:
-        print(f"❌ Import error: {e}")
+        print(f"Import error: {e}")
         return False
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"Unexpected error: {e}")
         return False
 
 

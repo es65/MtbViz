@@ -1,5 +1,5 @@
 """
-Centralized model imports to prevent circular dependencies and multiple table definitions.
+manual paste from mtb2 repo
 """
 
 # Export all models

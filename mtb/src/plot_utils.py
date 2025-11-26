@@ -134,6 +134,7 @@ def plotly_multi_y(
     y_range=None,
     y2_range=None,
     title=None,
+    yaxis_title=None,
     height=600,
     width=1000,
     colors=None,
@@ -243,6 +244,7 @@ def plotly_multi_y(
     fig.update_layout(
         title=title,
         xaxis_title=x_col,
+        yaxis_title=yaxis_title,
         height=height,
         width=width,
         showlegend=show_legend,

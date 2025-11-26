@@ -111,7 +111,7 @@ class BaseProcessor(ABC):
 
     @abstractmethod
     def process(self, *args, **kwargs):
-        """Process the data. Must be implemented by subclasses....but currently not consistently lol."""
+        """Process the data. Must be implemented by subclasses."""
         pass
 
     def validate_input(self, df: pd.DataFrame, required_cols: List[str]) -> None:
@@ -1113,8 +1113,6 @@ class Pipeline:
             # Step 2: Build features
             self.logger.info("Step 2: Building features...")
             processed_df = self.feature_builder.process(resampled_df)
-
-            print(processed_df.columns)
 
             # Save processed data
             processed_df.to_parquet(processed_output_path)
