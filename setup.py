@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "viz=mtb.app.app_vis:main",
+            "vizmap=mtb.app.app_map:main",
             "process=mtb.src.cli:main",
         ],
     },

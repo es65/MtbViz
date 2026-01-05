@@ -20,6 +20,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+from scipy.signal import find_peaks
 from haversine import haversine, Unit
 from sqlalchemy import text
 from uuid import UUID
@@ -692,8 +693,6 @@ class MetricsCalculator(BaseProcessor):
             )
             .median()
         )
-
-        from scipy.signal import find_peaks
 
         # Find peaks (maxima) and valleys (minima)
         peaks, _ = find_peaks(
